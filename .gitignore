@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+*.exe
+*.dll
+*.log
+__pycache__/
+*.pyc
+*.pyo
+*.spec
+*.toc
+*.pkg
+*.pyz
+.env
+Intruder_Logs/*.log

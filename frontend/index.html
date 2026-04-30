@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>SmartScreen</title>
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div id="ai-status" style="
+position:fixed;
+bottom:20px;
+right:20px;
+background:rgba(0,0,0,0.6);
+color:white;
+padding:10px 16px;
+border-radius:10px;
+font-family:Segoe UI;
+font-size:14px;
+z-index:9999;
+">
+AI: Idle
+</div>  
+
+<div id="overlay"></div>
+<div id="focusLayer"></div>
+<div id="vignetteLayer"></div>
+
+<div id="control">
+
+  <div id="panelHeader">
+    <span id="miniToggle">☰</span>
+    <span class="panel-title">SmartScreen</span>
+  </div>
+
+  <div id="panelBody">
+
+    <button onclick="toggleBlur()">Blur</button>
+    <button onclick="toggleFocus()">Focus</button>
+    <button onclick="toggleVignette()">Vignette</button>
+    <button id="aiBtn" onclick="toggleAI()">Enable AI</button>
+
+  </div>
+
+</div>
+<div id="aiWarning">⚠ Someone is watching</div>
+<script src="renderer.js"></script>
+
+</body>
+</html>

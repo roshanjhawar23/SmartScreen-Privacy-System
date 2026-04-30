@@ -1,0 +1,7 @@
+{
+  "walkAwayLockDelay": 6000,
+  "intruderFocusDelay": 3000,
+  "intruderLockDelay": 5000,
+  "noUserLockEnabled": true,
+  "intruderDetectionEnabled": true
+}
