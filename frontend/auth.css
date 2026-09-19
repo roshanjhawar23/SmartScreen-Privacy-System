@@ -1,0 +1,99 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #101114;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(77, 132, 255, 0.14), transparent 35%),
+    radial-gradient(circle at 85% 90%, rgba(0, 204, 153, 0.09), transparent 30%),
+    #101114;
+}
+
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-card {
+  width: min(420px, 100%);
+  padding: 30px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 20px;
+  background: rgba(24, 25, 29, 0.96);
+  box-shadow: 0 24px 70px rgba(0,0,0,0.45);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.brand-mark {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: #2f6df6;
+  color: #fff;
+  font-weight: 800;
+  font-size: 22px;
+}
+
+h1, h2, p { margin: 0; }
+h1 { font-size: 20px; }
+h2 { font-size: 24px; margin-bottom: 6px; }
+.subtext { color: #9da2ad; font-size: 14px; margin-bottom: 22px; }
+.brand p { color: #8e949f; font-size: 12px; margin-top: 2px; }
+
+form { display: flex; flex-direction: column; }
+label { margin: 12px 0 7px; font-size: 13px; color: #d8dbe1; }
+
+input {
+  width: 100%;
+  padding: 12px 13px;
+  border: 1px solid #373a43;
+  border-radius: 10px;
+  background: #15161a;
+  color: #fff;
+  outline: none;
+}
+
+input:focus { border-color: #5283ff; box-shadow: 0 0 0 3px rgba(82,131,255,.15); }
+input:disabled, button:disabled { opacity: .55; cursor: not-allowed; }
+
+button {
+  margin-top: 18px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: #2f6df6;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) { filter: brightness(1.08); }
+button.secondary { background: transparent; color: #9fb8ff; border: 1px solid #363a44; }
+
+.message {
+  min-height: 20px;
+  margin-top: 16px;
+  color: #ffb2b2;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.message.ok { color: #8ee5bc; }
+.hint { margin-top: 12px; color: #6f7581; font-size: 12px; line-height: 1.4; }

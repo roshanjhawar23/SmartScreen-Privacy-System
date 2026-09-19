@@ -2,48 +2,52 @@
   "name": "smartscreen-privacy-suite",
   "version": "1.0.0",
   "description": "Privacy screen overlay desktop app",
-  "main": "main.js",
-
+  "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "test:state": "node tests/privacy_state.test.js"
   },
-
   "devDependencies": {
     "electron": "^28.0.0",
     "electron-builder": "^24.13.3"
   },
-
   "build": {
     "appId": "com.smartscreen.privacy",
     "productName": "SmartScreen Privacy Suite",
-
     "directories": {
       "output": "dist"
     },
-
     "files": [
       "**/*"
     ],
-
     "extraResources": [
       {
         "from": "backend/dist/",
         "to": "backend/dist/",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "assets/",
         "to": "assets/",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "models/",
+        "to": "models/",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
-
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"
     },
-
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true

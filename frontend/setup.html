@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SmartScreen Setup</title>
+  <link rel="stylesheet" href="setup.css">
+</head>
+<body>
+  <main class="setup-shell">
+    <section class="setup-card" aria-label="SmartScreen device setup">
+      <div class="brand">
+        <div class="brand-mark">S</div>
+        <div>
+          <h1>SmartScreen</h1>
+          <p>Local privacy protection</p>
+        </div>
+      </div>
+
+      <div class="eyebrow">DEVICE SETUP</div>
+      <h2>Set up this device</h2>
+      <p class="subtext">
+        SmartScreen runs locally on this Windows device. No account or cloud service is required.
+      </p>
+
+      <div class="setup-summary">
+        <div class="summary-row">
+          <span>Processing</span>
+          <strong>Local</strong>
+        </div>
+        <div class="summary-row">
+          <span>Device access</span>
+          <strong>Current Windows user</strong>
+        </div>
+        <div class="summary-row">
+          <span>Next step</span>
+          <strong>Face enrollment</strong>
+        </div>
+      </div>
+
+      <button id="continueButton" type="button">Continue</button>
+
+      <div id="setupMessage" class="message" role="status" aria-live="polite"></div>
+      <p class="hint">Configuration is stored locally on this device.</p>
+    </section>
+  </main>
+
+  <script src="setup_renderer.js"></script>
+</body>
+</html>

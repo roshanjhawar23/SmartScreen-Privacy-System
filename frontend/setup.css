@@ -1,0 +1,142 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #0f1115;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #0f1115;
+  color: #f4f6f8;
+}
+
+.setup-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+}
+
+.setup-card {
+  width: min(500px, 100%);
+  padding: 34px;
+  border: 1px solid #2a2d35;
+  border-radius: 18px;
+  background: #17191e;
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.42);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 32px;
+}
+
+.brand-mark {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: #2f6df6;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+h1, h2, p { margin: 0; }
+
+h1 {
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+
+.brand p {
+  margin-top: 2px;
+  color: #8c929d;
+  font-size: 12px;
+}
+
+.eyebrow {
+  margin-bottom: 10px;
+  color: #6f8fdd;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+h2 {
+  margin-bottom: 8px;
+  font-size: 25px;
+  letter-spacing: -0.02em;
+}
+
+.subtext {
+  color: #a2a8b2;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.setup-summary {
+  margin: 26px 0 24px;
+  border: 1px solid #2d3038;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 13px 15px;
+  border-bottom: 1px solid #292c33;
+}
+
+.summary-row:last-child { border-bottom: 0; }
+
+.summary-row span {
+  color: #9298a3;
+  font-size: 13px;
+}
+
+.summary-row strong {
+  color: #e5e8ec;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+button {
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: #2f6df6;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) { filter: brightness(1.06); }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.message {
+  min-height: 20px;
+  margin-top: 14px;
+  color: #e58d8d;
+  font-size: 13px;
+}
+
+.message.ok { color: #7cc8a2; }
+
+.hint {
+  margin-top: 8px;
+  color: #6f7580;
+  font-size: 12px;
+  line-height: 1.45;
+}

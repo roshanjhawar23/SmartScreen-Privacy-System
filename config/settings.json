@@ -3,5 +3,12 @@
   "intruderFocusDelay": 3000,
   "intruderLockDelay": 5000,
   "noUserLockEnabled": true,
-  "intruderDetectionEnabled": true
+  "intruderDetectionEnabled": true,
+  "recognitionThreshold": 0.363,
+  "faceDetectionThreshold": 0.85,
+  "aiProcessEveryN": 3,
+  "aiConfirmFrames": 5,
+  "minimumFaceSize": 70,
+  "noUserDetectionDelay": 1.5,
+  "walkAwayFocusDelay": 3000
 }

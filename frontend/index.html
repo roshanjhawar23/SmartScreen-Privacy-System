@@ -1,50 +1,94 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self' blob:;">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SmartScreen</title>
 <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
-  <div id="ai-status" style="
-position:fixed;
-bottom:20px;
-right:20px;
-background:rgba(0,0,0,0.6);
-color:white;
-padding:10px 16px;
-border-radius:10px;
-font-family:Segoe UI;
-font-size:14px;
-z-index:9999;
-">
-AI: Idle
-</div>  
+  <div id="overlay"></div>
+  <div id="pixelateLayer"></div>
+  <div id="blackoutLayer"></div>
+  <div id="focusLayer"></div>
+  <div id="vignetteLayer"></div>
 
-<div id="overlay"></div>
-<div id="focusLayer"></div>
-<div id="vignetteLayer"></div>
+  <div id="control">
+    <div id="panelHeader">
+      <button id="miniToggle" type="button" aria-label="Toggle control panel">≡</button>
+      <div class="brand-block">
+        <div class="panel-title">SmartScreen</div>
+        <div id="deviceStatus">Local privacy protection</div>
+      </div>
+    </div>
 
-<div id="control">
+    <div class="live-status" aria-live="polite">
+      <div class="status-card">
+        <span class="section-label">PROTECTION</span>
+        <span id="ai-status">Inactive</span>
+      </div>
+      <div class="status-card">
+        <span class="section-label">IDENTITY</span>
+        <span id="identity-live">Not monitored</span>
+      </div>
+    </div>
 
-  <div id="panelHeader">
-    <span id="miniToggle">☰</span>
-    <span class="panel-title">SmartScreen</span>
+    <div id="panelBody">
+      <div class="section-label section-heading">EFFECTS</div>
+      <div class="action-grid">
+        <button id="blurBtn" type="button">Blur</button>
+        <button id="pixelateBtn" type="button">Pixelate</button>
+        <button id="blackoutBtn" type="button">Blackout</button>
+        <button id="effectsBtn" type="button" aria-expanded="false">Effects</button>
+      </div>
+
+      <div id="effectsPanel" class="effects-panel" hidden>
+        <div class="effect-row">
+          <div>
+            <span class="effect-name">Focus</span>
+            <span class="effect-value" id="focusValue">Active manually</span>
+          </div>
+          <button id="focusBtn" class="mini-effect" type="button">Toggle</button>
+        </div>
+        <div class="effect-row">
+          <div>
+            <span class="effect-name">Vignette</span>
+            <span class="effect-value" id="vignetteValue">Off</span>
+          </div>
+          <button id="vignetteBtn" class="mini-effect" type="button">Toggle</button>
+        </div>
+        <div class="effect-control">
+          <div class="effect-control-head"><span>Pixel block size</span><span id="pixelateValue">12 px</span></div>
+          <input id="pixelateStrength" type="range" min="6" max="32" value="12">
+        </div>
+        <div class="effect-control">
+          <div class="effect-control-head"><span>Blackout opacity</span><span id="blackoutValue">94%</span></div>
+          <input id="blackoutOpacity" type="range" min="70" max="100" value="94">
+        </div>
+        <div class="effect-control">
+          <div class="effect-control-head"><span>Blur strength</span><span id="blurStrengthValue">15 px</span></div>
+          <input id="blurStrength" type="range" min="4" max="30" value="15">
+        </div>
+        <div class="effect-control">
+          <div class="effect-control-head"><span>Focus intensity</span><span id="focusIntensityValue">76%</span></div>
+          <input id="focusIntensity" type="range" min="20" max="95" value="76">
+        </div>
+      </div>
+
+      <button id="aiBtn" class="primary-action" type="button">Enable Protection</button>
+    </div>
+
+    <div class="event-row">
+      <div class="section-label">LAST EVENT</div>
+      <div id="eventList" class="event-list" aria-live="polite"></div>
+    </div>
+
+    <button id="identityBtn" class="identity-action" type="button">Enroll Owner</button>
   </div>
 
-  <div id="panelBody">
-
-    <button onclick="toggleBlur()">Blur</button>
-    <button onclick="toggleFocus()">Focus</button>
-    <button onclick="toggleVignette()">Vignette</button>
-    <button id="aiBtn" onclick="toggleAI()">Enable AI</button>
-
-  </div>
-
-</div>
-<div id="aiWarning">⚠ Someone is watching</div>
-<script src="renderer.js"></script>
-
+  <div id="aiWarning">Privacy protection triggered</div>
+  <script src="privacy_state.js"></script>
+  <script src="renderer.js"></script>
 </body>
 </html>

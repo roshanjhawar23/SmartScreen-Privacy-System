@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SmartScreen Authentication</title>
+  <link rel="stylesheet" href="auth.css">
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="auth-card" aria-label="SmartScreen authentication">
+      <div class="brand">
+        <div class="brand-mark">S</div>
+        <div>
+          <h1>SmartScreen</h1>
+          <p>Local privacy protection</p>
+        </div>
+      </div>
+
+      <div id="loginView">
+        <h2>Welcome back</h2>
+        <p class="subtext">Sign in to start privacy protection.</p>
+
+        <form id="loginForm">
+          <label for="loginUsername">Username</label>
+          <input id="loginUsername" autocomplete="username" maxlength="32" required>
+
+          <label for="loginPassword">Password</label>
+          <input id="loginPassword" type="password" autocomplete="current-password" required>
+
+          <button id="loginButton" type="submit">Sign in</button>
+        </form>
+
+        <button class="secondary" id="showRegister" type="button">Create account</button>
+      </div>
+
+      <div id="registerView" hidden>
+        <h2>Create your account</h2>
+        <p class="subtext">Your credentials stay on this device.</p>
+
+        <form id="registerForm">
+          <label for="registerUsername">Username</label>
+          <input id="registerUsername" autocomplete="username" maxlength="32" required>
+
+          <label for="registerPassword">Password</label>
+          <input id="registerPassword" type="password" autocomplete="new-password" required>
+
+          <label for="registerConfirm">Confirm password</label>
+          <input id="registerConfirm" type="password" autocomplete="new-password" required>
+
+          <button id="registerButton" type="submit">Create account</button>
+        </form>
+
+        <button class="secondary" id="showLogin" type="button">Back to sign in</button>
+      </div>
+
+      <div id="authMessage" class="message" role="status" aria-live="polite"></div>
+      <div id="authHint" class="hint">First launch: create a local SmartScreen account.</div>
+    </section>
+  </main>
+
+  <script src="auth_renderer.js"></script>
+</body>
+</html>

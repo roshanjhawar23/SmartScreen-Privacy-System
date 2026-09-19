@@ -13,3 +13,10 @@ __pycache__/
 *.pyz
 .env
 Intruder_Logs/*.log
+
+# Local SmartScreen device profile
+device_profile.json
+
+# SmartScreen local/runtime data
+Intruder_Logs/
+*.backup*

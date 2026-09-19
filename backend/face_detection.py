@@ -1,118 +1,272 @@
-import threading
-import cv2
-import mediapipe as mp
+import argparse
+import json
 import os
 import sys
+import threading
 import time
 from datetime import datetime
 
-# ---------------- LOG DIRECTORY ----------------
-home_dir = os.path.expanduser("~")
-log_dir = os.path.join(home_dir, "SmartScreen_Intruders")
-os.makedirs(log_dir, exist_ok=True)
+import cv2
+import numpy as np
 
-# ---------------- SAFE CAMERA INIT ----------------
-def open_camera():
-    # try multiple indexes
-    for i in range(3):
-        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
-        if cap.isOpened():
-            print(f"CAMERA_READY_{i}", flush=True)
-            return cap
-    print("CAMERA_FAILED", flush=True)
+
+STOP_EVENT = threading.Event()
+
+
+def emit(message: str) -> None:
+    print(message, flush=True)
+
+
+def emit_error(message: str) -> None:
+    emit(f"AI_ERROR|{message}")
+
+
+def normalize(feature: np.ndarray) -> np.ndarray:
+    vector = np.asarray(feature, dtype=np.float32).reshape(-1)
+    norm = float(np.linalg.norm(vector))
+    if norm <= 1e-8:
+        raise ValueError("Face embedding normalization failed.")
+    return vector / norm
+
+
+def open_camera() -> cv2.VideoCapture | None:
+    for index in range(3):
+        camera = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+        if camera.isOpened():
+            camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            return camera
+        camera.release()
     return None
 
-cap = open_camera()
-if cap is None:
-    time.sleep(3)
-    sys.exit(1)
 
-# ---------------- MEDIAPIPE ----------------
-mp_face = mp.solutions.face_detection
-detector = mp_face.FaceDetection(min_detection_confidence=0.6)
+def read_startup_config() -> dict:
+    line = sys.stdin.readline()
+    if not line:
+        raise RuntimeError("AI configuration was not received.")
 
-# ---------------- STATE ----------------
-snapshot_taken=False
-last_status=None
+    try:
+        config = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid AI configuration: {exc}") from exc
 
-no_user_frames=0
-user_frames=0
-intruder_frames=0
+    template = config.get("template")
+    if not isinstance(template, list) or not template:
+        raise RuntimeError("Owner biometric template is missing.")
 
-CONFIRM_FRAMES=12
+    vector = normalize(np.asarray(template, dtype=np.float32))
+    config["template"] = vector.tolist()
+    config["threshold"] = float(config.get("threshold", 0.363))
+    config["detectionThreshold"] = float(config.get("detectionThreshold", 0.85))
+    config["processEveryN"] = max(1, int(config.get("processEveryN", 3)))
+    config["confirmFrames"] = max(1, int(config.get("confirmFrames", 5)))
+    config["minFaceSize"] = max(40, int(config.get("minFaceSize", 70)))
+    config["noUserDetectionDelay"] = max(0.5, float(config.get("noUserDetectionDelay", 1.5)))
+    config["logDir"] = str(config.get("logDir", os.path.join(os.path.dirname(os.path.dirname(__file__)), "Intruder_Logs")))
+    return config
 
-print("AI_STARTED", flush=True)
 
-running = True
-
-# ---------------- STOP LISTENER ----------------
-def listen_for_stop():
-    global running
-    while True:
+def stop_listener() -> None:
+    while not STOP_EVENT.is_set():
         line = sys.stdin.readline()
         if not line:
-            break
+            return
         if line.strip() == "STOP":
-            running = False
-            break
+            STOP_EVENT.set()
+            return
 
-threading.Thread(target=listen_for_stop, daemon=True).start()
 
-# ---------------- MAIN LOOP ----------------
-try:
-    while running:
+def save_intruder_snapshot(frame: np.ndarray, log_dir: str) -> str | None:
+    os.makedirs(log_dir, exist_ok=True)
+    filename = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3] + ".jpg"
+    path = os.path.join(log_dir, filename)
+    if cv2.imwrite(path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 88]):
+        return path
+    return None
 
-        ret,frame=cap.read()
-        if not ret:
-            time.sleep(0.1)
-            continue
 
-        rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-        results=detector.process(rgb)
+def heartbeat_loop() -> None:
+    while not STOP_EVENT.wait(2.0):
+        emit("AI_HEARTBEAT")
 
-        face_count=len(results.detections) if results.detections else 0
-        status=None
 
-        if face_count==0:
-            no_user_frames+=1
-            user_frames=0
-            intruder_frames=0
-            if no_user_frames>=CONFIRM_FRAMES:
-                status="NO_USER"
-                snapshot_taken=False
+def main() -> None:
+    parser = argparse.ArgumentParser(description="SmartScreen CPU-first identity monitor")
+    parser.add_argument("--detector", required=True)
+    parser.add_argument("--recognizer", required=True)
+    args = parser.parse_args()
 
-        elif face_count==1:
-            user_frames+=1
-            no_user_frames=0
-            intruder_frames=0
-            if user_frames>=CONFIRM_FRAMES:
-                status="USER_PRESENT"
-                snapshot_taken=False
+    if not hasattr(cv2, "FaceDetectorYN") or not hasattr(cv2, "FaceRecognizerSF"):
+        raise RuntimeError("OpenCV face APIs are unavailable. Install opencv-contrib-python>=4.10.")
 
+    if not os.path.exists(args.detector):
+        raise RuntimeError(f"Face detector model not found: {args.detector}")
+    if not os.path.exists(args.recognizer):
+        raise RuntimeError(f"Face recognition model not found: {args.recognizer}")
+
+    config = read_startup_config()
+    owner_template = np.asarray(config["template"], dtype=np.float32)
+    threshold = float(config["threshold"])
+    detection_threshold = float(config["detectionThreshold"])
+    process_every_n = int(config["processEveryN"])
+    confirm_frames = int(config["confirmFrames"])
+    min_face_size = int(config["minFaceSize"])
+    log_dir = config["logDir"]
+
+    detector = cv2.FaceDetectorYN.create(
+        args.detector,
+        "",
+        (320, 320),
+        detection_threshold,
+        0.3,
+        5000,
+        cv2.dnn.DNN_BACKEND_OPENCV,
+        cv2.dnn.DNN_TARGET_CPU,
+    )
+
+    recognizer = cv2.FaceRecognizerSF.create(
+        args.recognizer,
+        "",
+        cv2.dnn.DNN_BACKEND_OPENCV,
+        cv2.dnn.DNN_TARGET_CPU,
+    )
+
+    camera = open_camera()
+    if camera is None:
+        raise RuntimeError("CAMERA_ERROR|No accessible camera was found.")
+
+    emit("AI_READY")
+    threading.Thread(target=stop_listener, daemon=True).start()
+    threading.Thread(target=heartbeat_loop, daemon=True).start()
+
+    owner_streak = 0
+    unknown_streak = 0
+    no_face_streak = 0
+    last_state = None
+    frame_counter = 0
+    snapshot_state = None
+    last_presence_time = time.monotonic()
+    no_user_detection_delay = float(config["noUserDetectionDelay"])
+
+    try:
+        while not STOP_EVENT.is_set():
+            ok, frame = camera.read()
+            if not ok:
+                time.sleep(0.05)
+                continue
+
+            frame_counter += 1
+            now = time.monotonic()
+
+            if frame_counter % process_every_n != 0:
+                continue
+
+            height, width = frame.shape[:2]
+            detector.setInputSize((width, height))
+            _, faces = detector.detect(frame)
+
+            if faces is None or len(faces) == 0:
+                no_face_streak += 1
+                owner_streak = 0
+                unknown_streak = 0
+                if now - last_presence_time >= no_user_detection_delay and last_state != "NO_USER":
+                    emit("STATE|NO_USER|faces=0|owners=0|unknown=0|best=0.0000")
+                    last_state = "NO_USER"
+                    snapshot_state = None
+                continue
+
+            no_face_streak = 0
+            owners = 0
+            unknown = 0
+            best_owner_score = -1.0
+            best_unknown_score = -1.0
+
+            for face in faces:
+                x, y, w, h = [float(v) for v in face[:4]]
+                detection_score = float(face[-1])
+                if detection_score < detection_threshold or w < min_face_size or h < min_face_size:
+                    continue
+
+                aligned = recognizer.alignCrop(frame, face[:-1])
+                feature = normalize(recognizer.feature(aligned))
+                similarity = float(np.dot(owner_template, feature))
+
+                if similarity >= threshold:
+                    owners += 1
+                    best_owner_score = max(best_owner_score, similarity)
+                else:
+                    unknown += 1
+                    best_unknown_score = max(best_unknown_score, similarity)
+
+            if owners == 0 and unknown == 0:
+                no_face_streak += 1
+                owner_streak = 0
+                unknown_streak = 0
+                if now - last_presence_time >= no_user_detection_delay and last_state != "NO_USER":
+                    emit("STATE|NO_USER|faces=0|owners=0|unknown=0|best=0.0000")
+                    last_state = "NO_USER"
+                    snapshot_state = None
+                continue
+
+            no_face_streak = 0
+            last_presence_time = now
+
+            if unknown > 0 and owners > 0:
+                candidate_state = "OWNER_AND_UNKNOWN"
+                owner_streak += 1
+                unknown_streak += 1
+            elif unknown > 0:
+                candidate_state = "UNKNOWN_GROUP" if unknown > 1 else "UNKNOWN_PERSON"
+                unknown_streak += 1
+                owner_streak = 0
+            else:
+                candidate_state = "OWNER_PRESENT"
+                owner_streak += 1
+                unknown_streak = 0
+
+            if candidate_state in ("OWNER_PRESENT",):
+                stable = owner_streak >= confirm_frames
+            elif candidate_state in ("UNKNOWN_PERSON", "UNKNOWN_GROUP", "OWNER_AND_UNKNOWN"):
+                stable = unknown_streak >= confirm_frames
+            else:
+                stable = False
+
+            if not stable:
+                continue
+
+            best_score = best_owner_score if owners > 0 else best_unknown_score
+            state = candidate_state
+            if state != last_state:
+                emit(
+                    f"STATE|{state}|faces={owners + unknown}|owners={owners}|unknown={unknown}|best={best_score:.4f}|ownerScore={max(best_owner_score, 0.0):.4f}"
+                )
+                last_state = state
+
+                if state in ("UNKNOWN_PERSON", "UNKNOWN_GROUP", "OWNER_AND_UNKNOWN"):
+                    if snapshot_state != state:
+                        snapshot_path = save_intruder_snapshot(frame, log_dir)
+                        if snapshot_path:
+                            emit(f"PHOTO_SAVED|{snapshot_path}")
+                        else:
+                            emit("PHOTO_SAVE_FAILED")
+                        snapshot_state = state
+                else:
+                    snapshot_state = None
+
+    finally:
+        camera.release()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:
+        message = str(exc)
+        if message.startswith("CAMERA_ERROR|"):
+            emit_error(message)
         else:
-            intruder_frames+=1
-            user_frames=0
-            no_user_frames=0
-            if intruder_frames>=CONFIRM_FRAMES:
-                status="INTRUDER"
-                if not snapshot_taken:
-                    filename=datetime.now().strftime("%Y%m%d_%H%M%S")+".png"
-                    cv2.imwrite(os.path.join(log_dir,filename),frame)
-                    snapshot_taken=True
-
-        if status and status!=last_status:
-            print(status,flush=True)
-            last_status=status
-
-        cv2.waitKey(1)
-        time.sleep(0.03)
-
-except Exception as e:
-    print("PYTHON_ERROR", str(e), flush=True)
-
-finally:
-    if cap:
-        cap.release()
-    cv2.destroyAllWindows()
-    time.sleep(0.8)  
-    sys.exit(0)
+            emit_error(f"AI_UNAVAILABLE|{message}")
+        raise SystemExit(1)

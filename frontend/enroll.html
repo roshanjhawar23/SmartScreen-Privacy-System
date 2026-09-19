@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self' blob:; img-src 'self' data:;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SmartScreen Identity Enrollment</title>
+  <link rel="stylesheet" href="enroll.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="card">
+      <header class="brand">
+        <div class="mark">S</div>
+        <div>
+          <h1>SmartScreen</h1>
+          <p>Local privacy protection</p>
+        </div>
+      </header>
+
+      <div class="eyebrow">OWNER IDENTITY</div>
+      <h2>Enroll your face</h2>
+      <p class="intro">SmartScreen uses an on-device face template to distinguish the owner from an unrecognized person.</p>
+
+      <div class="camera-frame">
+        <video id="camera" autoplay playsinline muted></video>
+        <div id="cameraPlaceholder">Camera is not active</div>
+      </div>
+
+      <div class="status-row">
+        <span id="instruction">Start the camera to begin enrollment.</span>
+        <span id="progress">0 / 5</span>
+      </div>
+
+      <div id="message" class="message" role="status" aria-live="polite"></div>
+
+      <div class="actions">
+        <button id="startButton" type="button">Start camera</button>
+        <button id="captureButton" type="button" disabled>Capture sample</button>
+        <button id="finishButton" type="button" disabled>Complete enrollment</button>
+        <button id="cancelButton" type="button" class="secondary">Cancel</button>
+      </div>
+
+      <p class="hint">Capture five clear samples with only your face visible. Slightly vary your angle between samples.</p>
+    </section>
+  </main>
+
+  <canvas id="captureCanvas" width="640" height="480" hidden></canvas>
+  <script src="enroll_renderer.js"></script>
+</body>
+</html>
