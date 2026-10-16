@@ -28,19 +28,38 @@ function createLineSplitter(onLine){
 const NUMERIC_KEYS = new Set(['faces','owners','unknown','best','ownerScore','yaw','pitch']);
 const FACING = new Set(['FACING_SCREEN','GLANCING','AWAY']);
 
-// tracks=<id>:<O|U>:<facing>:<yaw>:<pitch>:<presentMs>:<facingMs>:<lookingMs>,...
+const LIVENESS = { L:'LIVE', S:'SUSPECT', U:'UNKNOWN' };
+
+// tracks=<id>:<O|U>:<facing>:<yaw>:<pitch>:<presentMs>:<facingMs>:<lookingMs>[:<L|S|U>:<size>],...
 function parseTracks(value){
   const tracks = [];
   for(const item of String(value || '').split(',')){
-    const [id, role, facing, yaw, pitch, presentMs, facingMs, lookingMs] = item.split(':');
+    const [id, role, facing, yaw, pitch, presentMs, facingMs, lookingMs, liveness, size] = item.split(':');
     if(!id || !FACING.has(facing)) continue;
     const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
     tracks.push({
       id:n(id), role:role === 'O' ? 'owner' : 'unknown', facing,
-      yaw:n(yaw), pitch:n(pitch), presentMs:n(presentMs), facingMs:n(facingMs), lookingMs:n(lookingMs)
+      yaw:n(yaw), pitch:n(pitch), presentMs:n(presentMs), facingMs:n(facingMs), lookingMs:n(lookingMs),
+      liveness:LIVENESS[liveness] || 'UNKNOWN', size:n(size)
     });
   }
   return tracks;
+}
+
+// STATS|fps=..|processedFps=..|recognitionMs=..|recognitionP95Ms=..|cpu=..
+function parseStatsMessage(message){
+  const stats = {};
+  for(const part of String(message).split('|').slice(1)){
+    const [key, value] = part.split('=');
+    if(/^[a-zA-Z0-9]{1,32}$/.test(key || '') && Number.isFinite(Number(value))) stats[key] = Number(value);
+  }
+  return stats;
+}
+
+// TAMPER|<kind>|k=v...
+function parseTamperMessage(message){
+  const [, kind = '', ...rest] = String(message).split('|');
+  return { kind:/^[a-z-]{1,40}$/.test(kind) ? kind : 'unknown', detail:rest.join('|').slice(0, 200) };
 }
 
 function parseStateMessage(message){
@@ -65,4 +84,4 @@ function parseErrorMessage(message){
   };
 }
 
-module.exports = { createLineSplitter, parseStateMessage, parseErrorMessage, parseTracks };
+module.exports = { createLineSplitter, parseStateMessage, parseErrorMessage, parseTracks, parseStatsMessage, parseTamperMessage };

@@ -41,7 +41,9 @@ function loadOwnerEmbedding(useOwner){
 // userData: reuse a folder from an earlier launch (restart tests); seedLog: activity.log lines.
 // activeApp: simulated foreground app { process, title } (default: a neutral app, so the real
 // foreground window never influences a test); change it mid-run with setActiveApp().
-async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, settings, userData:reuse, seedLog, activeApp = NEUTRAL_APP } = {}){
+// configCopy: run on a temporary copy of config/ (returned as ctx.configDir) so tests may edit it;
+// configDir: reuse such a copy from an earlier launch.
+async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, settings, userData:reuse, seedLog, activeApp = NEUTRAL_APP, configCopy = false, configDir:reuseConfig = null } = {}){
   const userData = reuse || fs.mkdtempSync(path.join(os.tmpdir(), 'smartscreen-e2e-'));
   if(seedLog){
     fs.mkdirSync(path.join(userData, 'logs'), { recursive:true });
@@ -66,6 +68,13 @@ async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, 
   if(mock) env.SMARTSCREEN_MOCK_BACKEND = mockScenarioPath(mock);
   else env.SMARTSCREEN_CAMERA_SOURCE = cameraSource || scenarioPath(scenario);
   if(settings) env.SMARTSCREEN_TEST_SETTINGS = JSON.stringify(settings);
+  let configDir = reuseConfig;
+  if(configDir) env.SMARTSCREEN_CONFIG_DIR = configDir;
+  else if(configCopy){
+    configDir = path.join(userData, 'config-copy');
+    fs.cpSync(path.join(REPO_DIR, 'config'), configDir, { recursive:true, filter:(src) => !/backup/i.test(src) });
+    env.SMARTSCREEN_CONFIG_DIR = configDir;
+  }
 
   const app = await electron.launch({ args:[REPO_DIR], cwd:REPO_DIR, env });
   const page = await app.firstWindow();
@@ -77,18 +86,33 @@ async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, 
   fs.mkdirSync(path.join(userData, 'biometric'), { recursive:true });
   fs.writeFileSync(path.join(userData, 'biometric', 'owner_face.enc'), encrypted);
 
-  return { app, page, userData, activeAppFile, logFile:path.join(userData, 'logs', 'activity.log') };
+  return { app, page, userData, activeAppFile, configDir, logFile:path.join(userData, 'logs', 'activity.log') };
 }
 
 function setActiveApp(ctx, app){
   fs.writeFileSync(ctx.activeAppFile, JSON.stringify(app));
 }
 
+// A hung quit fails the test loudly (instead of stalling the suite) and is killed so it
+// cannot affect later tests.
+const QUIT_TIMEOUT_MS = 20000;
+
 async function closeApp(ctx, { keepUserData = false } = {}){
   if(!ctx) return;
-  try{ await ctx.app.close(); }catch{}
+  let timer;
+  const quit = ctx.app.close().then(() => 'closed', () => 'closed');
+  const hung = new Promise((resolve) => { timer = setTimeout(() => resolve('hung'), QUIT_TIMEOUT_MS); });
+  const result = await Promise.race([quit, hung]);
+  clearTimeout(timer);
+  if(result === 'hung'){
+    try{ ctx.app.process().kill(); }catch{}
+  }
   if(!keepUserData){
     try{ fs.rmSync(ctx.userData, { recursive:true, force:true }); }catch{}
+  }
+  if(result === 'hung'){
+    const tail = readEvents(ctx.logFile).slice(-8).join(' ; ');
+    throw new Error(`app did not quit within ${QUIT_TIMEOUT_MS / 1000} s; last log events: ${tail}`);
   }
 }
 

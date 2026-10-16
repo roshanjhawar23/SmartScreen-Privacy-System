@@ -26,7 +26,9 @@ const BASE_PROFILE = Object.freeze({
   walkAwayLockDelay:6000,
   escalation:{ blurMs:0, focusMs:3000, lockMs:5000 },
   sensitiveEscalation:{ blurMs:0, focusMs:1000, lockMs:3000 },
-  notLooking:{ blurMs:2000, lockMs:20000 }
+  notLooking:{ blurMs:2000, lockMs:20000 },
+  threatMultiplier:1,
+  scoreBands:{ blurMs:35, focusMs:55, lockMs:80 }
 });
 
 function normalizeProfile(raw, base = BASE_PROFILE){
@@ -37,8 +39,17 @@ function normalizeProfile(raw, base = BASE_PROFILE){
     walkAwayLockDelay:Math.max(1000, num(p.walkAwayLockDelay, base.walkAwayLockDelay)),
     escalation:thresholds(p.escalation, base.escalation),
     sensitiveEscalation:thresholds(p.sensitiveEscalation, base.sensitiveEscalation),
-    notLooking:thresholds(p.notLooking, base.notLooking)
+    notLooking:thresholds(p.notLooking, base.notLooking),
+    threatMultiplier:Math.min(2, Math.max(0.25, num(p.threatMultiplier, base.threatMultiplier))),
+    scoreBands:bands(p.scoreBands, base.scoreBands)
   };
+}
+
+// Score bands use the same shape as thresholds (blur/focus/lock), in points 0–100.
+function bands(raw, fallback){
+  const b = raw && typeof raw === 'object' ? raw : {};
+  const t = thresholds({ blurMs:b.blur, focusMs:b.focus, lockMs:b.lock === null ? null : b.lock }, fallback);
+  return { blur:t.blurMs, focus:t.focusMs, lock:t.lockMs };
 }
 
 function normalizeApps(list){

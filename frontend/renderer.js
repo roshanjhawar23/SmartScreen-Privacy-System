@@ -381,9 +381,9 @@ function gateStatusText(snapshot) {
     case 'REVEALED': return 'Screen visible — owner verified';
     case 'ABSENCE_GRACE': return 'Owner not visible — concealing';
     case 'FAILSAFE':
-      return reason === 'camera-error'
-        ? 'Camera unavailable — screen protected'
-        : 'Verification unavailable — screen protected';
+      if (reason === 'camera-error') return 'Camera unavailable — screen protected';
+      if (reason.startsWith('tamper-')) return 'Tamper detected — screen protected';
+      return 'Verification unavailable — screen protected';
     default:
       return snapshot.enabled ? 'Presence Gate ready' : 'Presence Gate off';
   }
@@ -460,6 +460,64 @@ profileSelect?.addEventListener('change', async () => {
 window.electronAPI.onProfileChanged((info) => {
   applyProfiles(info);
   refreshSecurityEvents();
+});
+
+// Video input devices (ids only) so main can detect a swapped or removed camera.
+async function reportVideoDevices() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    window.electronAPI.reportVideoDevices(devices.filter((d) => d.kind === 'videoinput').map((d) => d.deviceId));
+  } catch {}
+}
+try { navigator.mediaDevices?.addEventListener?.('devicechange', reportVideoDevices); } catch {}
+
+// Diagnostics (local only).
+const diagBtn = document.getElementById('diagBtn');
+const diagPanel = document.getElementById('diagPanel');
+const diagExportBtn = document.getElementById('diagExportBtn');
+let diagTimer = null;
+
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+async function refreshDiagnostics() {
+  try {
+    const d = await window.electronAPI.getDiagnostics();
+    if (!d) return;
+    const b = d.backend;
+    const c = d.counters || {};
+    const n = (v, digits = 1) => (Number.isFinite(v) ? Number(v).toFixed(digits) : '—');
+    setText('diagCamera', b ? `${n(b.fps)} fps · ${n(b.processedFps)} analysed/s` : '—');
+    setText('diagRecognition', b ? `${n(b.recognitionMs)} ms · p95 ${n(b.recognitionP95Ms)} ms` : '—');
+    setText('diagCpu', `${b ? n(b.cpu, 0) : '—'} % / ${n(d.electron?.cpuPercent, 0)} %`);
+    setText('diagThreats', `${c.threats ?? 0} / ${c.lockRequests ?? 0}`);
+    setText('diagTamper', `${c.failsafes ?? 0} / ${c.tamperEvents ?? 0}`);
+  } catch {}
+}
+
+diagBtn?.addEventListener('click', () => {
+  const open = diagPanel?.hidden;
+  if (diagPanel) diagPanel.hidden = !open;
+  diagBtn.setAttribute('aria-expanded', String(Boolean(open)));
+  if (open) {
+    refreshDiagnostics();
+    diagTimer = setInterval(refreshDiagnostics, 2000);
+  } else if (diagTimer) {
+    clearInterval(diagTimer);
+    diagTimer = null;
+  }
+});
+
+diagExportBtn?.addEventListener('click', async () => {
+  diagExportBtn.disabled = true;
+  try {
+    const result = await window.electronAPI.exportDiagnostics();
+    if (result?.ok) showSecurityNotification(`Diagnostics saved: ${result.file}`);
+  } finally {
+    diagExportBtn.disabled = false;
+  }
 });
 
 window.electronAPI.onPresenceGate((snapshot) => {
@@ -695,6 +753,7 @@ window.electronAPI.onBiometricUpdated(() => {
 setIntensity(intensityLevel);
 setGateEnabled(loadGatePreference());
 Promise.resolve(window.electronAPI.getProfiles()).then(applyProfiles).catch(() => {});
+reportVideoDevices();
 refreshBiometricStatus();
 refreshSecurityEvents();
 setInterval(() => { if (aiEnabled) refreshSecurityEvents(); }, 5000);

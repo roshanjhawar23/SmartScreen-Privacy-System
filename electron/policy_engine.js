@@ -11,6 +11,11 @@
 //
 // Without track data (older backend) every unknown is assumed to have faced the screen
 // since the threat began, which reproduces the Phase 1 fixed timings.
+//
+// Phase 3: a threat score (threat_score.js) mapped through the profile's score bands can
+// escalate further; the stronger of the time rule and the score band wins.
+
+const { threatScore, scoreAction } = require('./threat_score');
 
 const THREAT_STATES = new Set(['UNKNOWN_PERSON','UNKNOWN_GROUP','OWNER_AND_UNKNOWN']);
 const ACTIONS = ['NONE','BLUR','FOCUS','LOCK'];
@@ -62,7 +67,15 @@ function decide({ state, tracks, app = null, profile, profileName = 'Default', t
     }
   }
 
+  const scored = threatScore({ tracks:unknowns, sensitiveApp:sensitive, profile });
+  const bandAction = scoreAction(scored.score, profile.scoreBands);
+  const byScore = rank(bandAction) > rank(best.action);
+  const action = byScore ? bandAction : best.action;
+
   const factors = [
+    { name:'threatScore', value:scored.score },
+    { name:'scoreComponents', value:scored.components.map((c) => `${c.label} +${c.points}`) },
+    { name:'decidedBy', value:byScore ? 'threat-score' : 'exposure-time' },
     { name:'unknownFaces', value:unknowns.length },
     { name:'facing', value:best.face.facing },
     { name:'exposureMs', value:Math.round(best.exposureMs) },
@@ -76,11 +89,15 @@ function decide({ state, tracks, app = null, profile, profileName = 'Default', t
   const who = unknowns.length > 1 ? `${unknowns.length} unknown people; nearest: ` : '';
   const what = `${who}${describeFace(best.face, best.looking)} for ${seconds(best.exposureMs)}`;
   const where = sensitive ? ` while ${sensitive.name} (${sensitive.label.toLowerCase()}) is active` : '';
-  const verb = VERBS[best.action];
-  const reason = verb
-    ? `${verb}: ${what}${where} (${profileName} profile)`
-    : `Watching: ${what}${where} (${profileName} profile)`;
-  return { action:best.action, reason, factors };
+  const verb = VERBS[action];
+  let reason;
+  if(byScore){
+    const top = [...scored.components].sort((a, b) => b.points - a.points).slice(0, 3).map((c) => c.label).join(', ');
+    reason = `${verb}: threat score ${scored.score}/100 (${top})${where} (${profileName} profile)`;
+  }else{
+    reason = verb ? `${verb}: ${what}${where} (${profileName} profile)` : `Watching: ${what}${where} (${profileName} profile)`;
+  }
+  return { action, reason, factors, score:scored.score };
 }
 
 module.exports = { decide, stageFor, ageTrack, ACTIONS, THREAT_STATES };

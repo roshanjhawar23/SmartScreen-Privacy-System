@@ -35,6 +35,7 @@ function gateSettings(settings = {}){
     absenceGraceMs:Math.max(0, num(g.absenceGraceMs, 1500)),
     failsafeLockMs:failsafeLockMs > 0 ? failsafeLockMs : 0,
     curtainEffect:CURTAIN_EFFECTS.includes(g.curtainEffect) ? g.curtainEffect : 'blackout',
+    requireLiveness:g.requireLiveness !== false,
     minOwnerScore:num(g.minOwnerScore, num(settings.recognitionThreshold, 0.363))
   };
 }
@@ -45,7 +46,7 @@ function createPresenceGate(deps = {}){
     onChange = () => {},
     log = () => {},
     lock = () => {},
-    timers = { setTimeout, clearTimeout, now:() => Date.now() }
+    timers = { setTimeout, clearTimeout, now:() => performance.now() } // monotonic
   } = deps;
 
   let state = STATES.DISABLED;
@@ -116,6 +117,15 @@ function createPresenceGate(deps = {}){
     }
   }
 
+  // Liveness of the owner's face (heuristic, Phase 3). Not required → treated as LIVE.
+  function ownerLiveness(payload){
+    if(!config().requireLiveness) return 'LIVE';
+    const owners = (payload.tracks || []).filter((t) => t.role === 'owner');
+    if(owners.length === 0) return 'MISSING';
+    if(owners.some((t) => t.liveness === 'SUSPECT')) return 'SUSPECT';
+    return owners.some((t) => t.liveness === 'LIVE') ? 'LIVE' : 'UNKNOWN';
+  }
+
   function notOwner(why){
     if(state === STATES.VERIFYING) transition(STATES.CONCEALED, why);
     else if(state === STATES.REVEALED) startGrace(why);
@@ -137,8 +147,12 @@ function createPresenceGate(deps = {}){
       const ownerOk = Number(payload.owners ?? 1) >= 1
         && Number(payload.unknown ?? 0) === 0
         && Number(payload.ownerScore ?? 0) >= config().minOwnerScore;
-      if(ownerOk) ownerUpdate();
-      else notOwner('owner-score-below-threshold');
+      if(!ownerOk){ notOwner('owner-score-below-threshold'); return; }
+      const liveness = ownerLiveness(payload);
+      if(liveness === 'SUSPECT') notOwner('liveness-suspect');
+      else if(liveness === 'MISSING') notOwner('liveness-unavailable');
+      else if(liveness === 'LIVE') ownerUpdate();
+      // UNKNOWN: no evidence yet; neither count nor reset
     }else if(THREAT_STATES.has(identityState)){
       conceal(`threat-${identityState.toLowerCase()}`);
     }else if(identityState === 'NO_USER'){

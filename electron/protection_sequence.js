@@ -36,8 +36,9 @@ function createProtectionSequence(deps){
     log = () => {},
     lock = () => {},
     evaluateThreat = null,
+    // Monotonic clock: deadlines and threat durations must not move with the system clock.
     timers = {
-      setTimeout, clearTimeout, setInterval, clearInterval, now: () => Date.now()
+      setTimeout, clearTimeout, setInterval, clearInterval, now: () => performance.now()
     }
   } = deps;
 

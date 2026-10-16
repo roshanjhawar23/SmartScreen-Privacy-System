@@ -74,6 +74,14 @@ body.secondary-overlay #control,body.secondary-overlay #aiWarning{display:none!i
 .profile-row{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:8px}
 #profileSelect{height:24px;min-width:0;border:1px solid var(--line);border-radius:7px;background:var(--button);color:var(--text);font:600 10px/1 "Segoe UI",system-ui,sans-serif;padding:0 6px}
 #profileSelect:focus{outline:1px solid var(--accent)}
+.event-row-head{display:flex;justify-content:space-between;align-items:center}
+#control .link-action{height:auto;padding:0;background:none;color:var(--label);font-size:8px;letter-spacing:.06em}
+#control .link-action:hover{background:none;color:#e2e6eb}
+.diag-panel{border:1px solid var(--line);border-radius:8px;padding:7px 8px;display:flex;flex-direction:column;gap:6px}
+.diag-panel[hidden]{display:none}
+.diag-grid{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:9px;color:#bcc3cb}
+.diag-grid span:nth-child(even){color:#e2e6eb;text-align:right;font-variant-numeric:tabular-nums}
+#control #diagExportBtn{height:26px}
 .gate-row{display:grid;grid-template-columns:1fr auto;align-items:center;gap:6px;min-height:28px}
 #gate-status{min-width:0;color:#bcc3cb;font-size:9px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #gate-status.is-concealed{color:#e2e6eb}

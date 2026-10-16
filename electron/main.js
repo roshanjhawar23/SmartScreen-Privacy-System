@@ -2,10 +2,11 @@ const { app, BrowserWindow, globalShortcut, ipcMain, Tray, Menu, dialog, session
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
+const crypto = require('crypto');
 const { isConfigured, createProfile, readProfile, markBiometricEnrolled } = require('./device_profile');
 const { saveTemplate, readTemplate } = require('./biometric_store');
 const { formatLogLine, readSecurityEvents } = require('./security_events');
-const { createLineSplitter, parseStateMessage, parseErrorMessage } = require('./ai_protocol');
+const { createLineSplitter, parseStateMessage, parseErrorMessage, parseStatsMessage, parseTamperMessage } = require('./ai_protocol');
 const { createProtectionSequence } = require('./protection_sequence');
 const { planOverlayWindows } = require('./display_layout');
 const { clampLevel } = require('../frontend/intensity');
@@ -15,12 +16,19 @@ const { createVirtualDesktops, followCurrentDesktop } = require('./virtual_deskt
 const { normalizePolicies, resolveProfileName, matchSensitiveApp } = require('./policies');
 const { decide } = require('./policy_engine');
 const { createActiveWindowReader } = require('./active_window');
+const { FAILSAFE_KINDS, configDigest, createClockMonitor, createRestartLoopDetector, diffDevices } = require('./tamper');
+const { createDiagnostics } = require('./diagnostics');
 
 // Self-test harness only (SMARTSCREEN_TEST=1): isolated profile and a recorded camera source.
 const TEST_MODE = isTestMode();
 if(TEST_MODE && process.env.SMARTSCREEN_USER_DATA){
   app.setPath('userData', path.resolve(process.env.SMARTSCREEN_USER_DATA));
 }
+// Test mode can point at a copy of config/ (tamper tests edit it while the app runs).
+const CONFIG_DIR = TEST_MODE && process.env.SMARTSCREEN_CONFIG_DIR
+  ? path.resolve(process.env.SMARTSCREEN_CONFIG_DIR)
+  : path.join(__dirname,'..','config');
+const CONFIG_FILES = ['settings.json','policies.json'];
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if(!gotSingleInstanceLock){
@@ -47,7 +55,7 @@ let shortcutsRegistered = false;
 let ignoringMouse = true;
 let pythonProcess = null;
 let lastIntruderImage = '';
-let lastAIHeartbeat = 0;
+let lastAIHeartbeat = 0;     // monotonic ms (performance.now): immune to system clock changes
 let aiWatchdog = null;
 let aiFailureReported = false;
 let lastAIState = null;       // AI_STATE is logged on change only (the backend re-emits ~400 ms)
@@ -55,7 +63,10 @@ let curtainState = { on:false, effect:'blackout' };
 let contentProtected = false;
 let trayStatus = { icon:'icon-gray.png', tooltip:'SmartScreen Privacy Suite' };
 
+const diagnostics = createDiagnostics();
+
 function writeLog(event){
+  diagnostics.record(event);
   if(!logDir){
     logDir = path.join(app.getPath('userData'), 'logs');
     logFile = path.join(logDir, 'activity.log');
@@ -70,7 +81,7 @@ function activityLogFile(){
 
 function loadSettings(){
   try{
-    const data = fs.readFileSync(path.join(__dirname,'..','config','settings.json'));
+    const data = fs.readFileSync(path.join(CONFIG_DIR,'settings.json'));
     settings = JSON.parse(data);
   }catch(err){
     console.error('Failed to load settings:', err);
@@ -91,7 +102,7 @@ function policyStateFile(){
 
 function loadPolicies(){
   try{
-    policies = normalizePolicies(JSON.parse(fs.readFileSync(path.join(__dirname,'..','config','policies.json'),'utf8')));
+    policies = normalizePolicies(JSON.parse(fs.readFileSync(path.join(CONFIG_DIR,'policies.json'),'utf8')));
   }catch(err){
     console.error('Failed to load policies:', err);
     policies = normalizePolicies(null);
@@ -149,6 +160,79 @@ function pollActiveApp(){
   if(key === prev) return;
   activeApp = match;
   writeLog(match ? `SENSITIVE_APP_ACTIVE|category=${match.label}|app=${match.name}` : 'SENSITIVE_APP_INACTIVE');
+}
+
+// ---------------------------------------------------------------------------
+// Anomaly and tamper detection (Phase 3). Every kind is its own TAMPER event;
+// FAILSAFE_KINDS conceal the screen (Presence Gate FAILSAFE) while protection is on.
+
+const restartLoop = createRestartLoopDetector();
+const clockMonitor = createClockMonitor();
+let integrityKey = null;
+const configBaseline = new Map(); // file → HMAC digest
+let videoDevices = null;          // latest renderer report (deviceIds)
+let videoBaseline = null;         // captured when protection is enabled
+
+function reportTamper(kind, detail = ''){
+  writeLog(`TAMPER|${kind}${detail ? `|${detail}` : ''}`);
+  if(protectionActive && FAILSAFE_KINDS.has(kind)) presenceGate.failsafe(`tamper-${kind}`);
+}
+
+function loadIntegrityKey(){
+  const file = path.join(app.getPath('userData'), 'integrity.key');
+  try{
+    if(fs.existsSync(file)) return Buffer.from(safeStorage.decryptString(Buffer.from(fs.readFileSync(file,'utf8'),'base64')),'hex');
+  }catch(err){
+    writeLog(`INTEGRITY_KEY_ERROR|${err.message}`);
+  }
+  const key = crypto.randomBytes(32);
+  try{ fs.writeFileSync(file, safeStorage.encryptString(key.toString('hex')).toString('base64')); }catch(err){ writeLog(`INTEGRITY_KEY_ERROR|${err.message}`); }
+  return key;
+}
+
+function readConfigDigest(name){
+  try{ return configDigest(integrityKey, fs.readFileSync(path.join(CONFIG_DIR, name))); }catch{ return 'missing'; }
+}
+
+// Baseline at startup; report files that changed since the last run (info) and watch for
+// changes while running (tamper).
+function startConfigIntegrity(){
+  if(!safeStorage.isEncryptionAvailable()) return;
+  integrityKey = loadIntegrityKey();
+  const stateFile = path.join(app.getPath('userData'), 'integrity_state.json');
+  let previous = {};
+  try{ previous = JSON.parse(fs.readFileSync(stateFile,'utf8')); }catch{}
+  for(const name of CONFIG_FILES){
+    const digest = readConfigDigest(name);
+    if(previous[name] && previous[name] !== digest) writeLog(`CONFIG_CHANGED_SINCE_LAST_RUN|file=${name}`);
+    configBaseline.set(name, digest);
+    fs.watchFile(path.join(CONFIG_DIR, name), { interval:1000 }, ()=>{
+      const now = readConfigDigest(name);
+      if(now === configBaseline.get(name)) return;
+      configBaseline.set(name, now);
+      persistConfigDigests(stateFile);
+      reportTamper('config-modified', `file=${name}`);
+    });
+  }
+  persistConfigDigests(stateFile);
+}
+
+function persistConfigDigests(stateFile){
+  try{ fs.writeFileSync(stateFile, JSON.stringify(Object.fromEntries(configBaseline))); }catch{}
+}
+
+function checkClock(){
+  const jump = clockMonitor.check();
+  if(!jump) return;
+  if(jump.major) reportTamper('clock-jump', `deltaMs=${jump.jumpMs}`);
+  else writeLog(`CLOCK_ADJUSTED|deltaMs=${jump.jumpMs}`);
+}
+
+function electronMetrics(){
+  const metrics = app.getAppMetrics();
+  const cpuPercent = metrics.reduce((sum, m) => sum + (m.cpu?.percentCPUUsage || 0), 0);
+  const memoryMB = metrics.reduce((sum, m) => sum + (m.memory?.workingSetSize || 0), 0) / 1024;
+  return { cpuPercent:Math.round(cpuPercent * 10) / 10, memoryMB:Math.round(memoryMB), processes:metrics.length };
 }
 
 function setActiveAppPolling(on){
@@ -741,6 +825,7 @@ function sendAIState(payload){
 // Report a monitoring failure to the renderer once per AI run, so a later
 // generic "exited with code 1" does not overwrite a specific CAMERA_ERROR.
 function reportAIFailure(kind, message, reason){
+  if(protectionActive && restartLoop.record(performance.now())) reportTamper('ai-restart-loop', `failures=${restartLoop.count}|windowMin=10`);
   protection.handleMonitorFailure(`ai-failed-${kind}`);
   presenceGate.failsafe(reason || (kind === 'CAMERA_ERROR' ? 'camera-error' : 'ai-unavailable'));
   if(aiFailureReported) return;
@@ -760,10 +845,10 @@ function stopAIProcess(){
 function startAIWatchdog(){
   if(aiWatchdog) clearInterval(aiWatchdog);
   const timeoutMs = Math.max(5000, Number(effectiveSettings().aiWatchdogTimeoutMs ?? 15000) || 15000);
-  lastAIHeartbeat = Date.now();
+  lastAIHeartbeat = performance.now();
   aiWatchdog = setInterval(() => {
     if(!pythonProcess || !win || win.isDestroyed()) return;
-    if(Date.now() - lastAIHeartbeat > timeoutMs){
+    if(performance.now() - lastAIHeartbeat > timeoutMs){
       writeLog('AI_WATCHDOG_TIMEOUT');
       reportAIFailure('AI_UNAVAILABLE','The privacy recognition service stopped responding.','watchdog-timeout');
       stopAIProcess();
@@ -780,6 +865,7 @@ ipcMain.on('start-ai',()=>{
   if(!win || pythonProcess) return;
   protectionActive = true;
   setActiveAppPolling(true);
+  videoBaseline = videoDevices ? [...videoDevices] : null;
   // The curtain goes up before the camera starts.
   if(presenceGate.state === 'FAILSAFE') presenceGate.retry();
   else presenceGate.start();
@@ -883,13 +969,13 @@ function startAI(){
     if(!win || !isCurrent()) return;
 
     if(msg === 'AI_READY'){
-      lastAIHeartbeat = Date.now();
+      lastAIHeartbeat = performance.now();
       writeLog('AI_READY');
       win.webContents.send('ai-ready');
     }else if(msg === 'AI_HEARTBEAT'){
-      lastAIHeartbeat = Date.now();
+      lastAIHeartbeat = performance.now();
     }else if(msg.startsWith('STATE|')){
-      lastAIHeartbeat = Date.now();
+      lastAIHeartbeat = performance.now();
       const payload = parseStateMessage(msg);
       if(payload.state !== lastAIState) writeLog(`AI_STATE|${msg}`);
       lastAIState = payload.state;
@@ -898,6 +984,11 @@ function startAI(){
       lastIntruderImage=msg.split('|').slice(1).join('|') || '';
       writeLog(msg);
       win.webContents.send('ai-photo-saved',{path:lastIntruderImage});
+    }else if(msg.startsWith('STATS|')){
+      diagnostics.setBackendStats(parseStatsMessage(msg));
+    }else if(msg.startsWith('TAMPER|')){
+      const { kind, detail } = parseTamperMessage(msg);
+      reportTamper(kind, detail);
     }else if(msg === 'PHOTO_SAVE_FAILED'){
       writeLog('PHOTO_SAVE_FAILED');
     }else if(msg.startsWith('AI_ERROR|')){
@@ -958,6 +1049,39 @@ ipcMain.on('stop-ai',()=>{
 
 ipcMain.handle('get-presence-gate',()=>presenceGate.snapshot());
 ipcMain.handle('get-profiles',()=>profileInfo());
+
+// Renderer reports the video input devices (deviceIds only) on load and on devicechange.
+ipcMain.on('video-devices',(event, ids)=>{
+  if(!win || event.sender !== win.webContents || !Array.isArray(ids)) return;
+  const list = ids.filter((id)=>typeof id === 'string').slice(0, 32);
+  videoDevices = list;
+  if(!protectionActive) return;
+  if(!videoBaseline){ videoBaseline = [...list]; return; }
+  const change = diffDevices(videoBaseline, list);
+  if(!change) return;
+  videoBaseline = [...list];
+  reportTamper('camera-device-changed', `added=${change.added}|removed=${change.removed}`);
+});
+
+ipcMain.handle('get-diagnostics',()=>diagnostics.snapshot(electronMetrics()));
+ipcMain.handle('export-diagnostics',async()=>{
+  const stamp = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+  const result = await dialog.showSaveDialog(win && !win.isDestroyed() ? win : undefined, {
+    title:'Export diagnostics',
+    defaultPath:path.join(app.getPath('documents'), `smartscreen-diagnostics-${stamp}.json`),
+    filters:[{ name:'JSON', extensions:['json'] }]
+  });
+  if(result.canceled || !result.filePath) return { ok:false, cancelled:true };
+  const report = {
+    ...diagnostics.snapshot(electronMetrics()),
+    app:{ version:app.getVersion(), electron:process.versions.electron, platform:process.platform },
+    profile:activeProfile,
+    recentEvents:readSecurityEvents(activityLogFile(), 50).map(({ timestamp, type, title }) => ({ timestamp, type, title }))
+  };
+  fs.writeFileSync(result.filePath, JSON.stringify(report, null, 2));
+  writeLog(`DIAGNOSTICS_EXPORTED|file=${path.basename(result.filePath)}`);
+  return { ok:true, file:path.basename(result.filePath) };
+});
 ipcMain.handle('set-profile',(_event,name)=>({ ok:typeof name === 'string' && setActiveProfile(name, 'panel'), ...profileInfo() }));
 ipcMain.handle('set-presence-gate',(_event,enabled)=>{
   const ok = presenceGate.setEnabled(enabled === true);
@@ -1033,7 +1157,12 @@ app.whenReady().then(()=>{
   // Never unlocks Windows: after a lock, unlock or resume the gate conceals and re-verifies.
   powerMonitor.on('lock-screen',()=>presenceGate.sessionLocked());
   powerMonitor.on('unlock-screen',()=>presenceGate.sessionUnlocked());
-  powerMonitor.on('resume',()=>presenceGate.resumed());
+  powerMonitor.on('resume',()=>{ clockMonitor.reset(); presenceGate.resumed(); });
+  powerMonitor.on('suspend',()=>clockMonitor.reset());
+
+  startConfigIntegrity();
+  setInterval(checkClock, 5000);
+  setInterval(()=>{ if(protectionActive) writeLog(diagnostics.summaryLine(electronMetrics())); }, 60000);
 
   const profile = readProfile(app.getPath('userData'));
   if(!profile?.setupComplete){

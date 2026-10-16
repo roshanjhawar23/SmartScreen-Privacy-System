@@ -25,7 +25,7 @@ test('state lines match the real backend format and parse', () => {
 });
 
 test('steps fire in time order with heartbeats', () => {
-  const t = run({ heartbeatMs:1000, stateUpdateMs:0, steps:[
+  const t = run({ heartbeatMs:1000, stateUpdateMs:0, autoTracks:false, steps:[
     { at:1500, state:'NO_USER' },
     { at:0, emit:'AI_READY' },
     { at:2500, state:'UNKNOWN_PERSON', snapshot:true }
@@ -44,7 +44,7 @@ test('steps fire in time order with heartbeats', () => {
 
 test('face states repeat like the real backend; NO_USER, errors and hangs stop them', () => {
   const owner = formatState('OWNER_PRESENT');
-  const t = run({ heartbeatMs:10000, stateUpdateMs:400, steps:[
+  const t = run({ heartbeatMs:10000, stateUpdateMs:400, autoTracks:false, steps:[
     { at:0, state:'OWNER_PRESENT' },
     { at:1000, state:'NO_USER' },
     { at:2000, state:'UNKNOWN_PERSON', snapshot:true },
@@ -58,7 +58,7 @@ test('face states repeat like the real backend; NO_USER, errors and hangs stop t
     formatState('UNKNOWN_PERSON'), formatState('UNKNOWN_PERSON') // 2400, 2800, then hung
   ]);
 
-  const e = run({ heartbeatMs:10000, steps:[{ at:0, state:'OWNER_PRESENT' }, { at:500, emit:'AI_ERROR|CAMERA_ERROR|x' }] });
+  const e = run({ heartbeatMs:10000, autoTracks:false, steps:[{ at:0, state:'OWNER_PRESENT' }, { at:500, emit:'AI_ERROR|CAMERA_ERROR|x' }] });
   e.timers.advance(3000);
   assert.deepEqual(e.lines, [owner, owner, 'AI_ERROR|CAMERA_ERROR|x']);
 });
@@ -107,5 +107,10 @@ test('scripted tracks grow their exposure like the real tracker', () => {
   assert.deepEqual(parsed.map((p) => p.tracks[0].presentMs), [0, 400, 800]);
   assert.deepEqual(parsed.map((p) => p.tracks[0].lookingMs), [0, 0, 0]);
   assert.equal(parsed[0].facing, 'AWAY');
-  assert.equal(formatTracks([{ id:3, facing:'GLANCING' }], 1000), '|facing=GLANCING|yaw=0.0|pitch=0.0|tracks=3:U:GLANCING:0.0:0.0:1000:0:1000');
+  assert.equal(formatTracks([{ id:3, facing:'GLANCING' }], 1000), '|facing=GLANCING|yaw=0.0|pitch=0.0|tracks=3:U:GLANCING:0.0:0.0:1000:0:1000:L:0.150');
+  const auto = run({ heartbeatMs:10000, stateUpdateMs:0, steps:[{ at:0, state:'OWNER_PRESENT' }] });
+  auto.timers.advance(10);
+  const owner = parseStateMessage(auto.lines[0]).tracks[0];
+  assert.equal(owner.role, 'owner');
+  assert.equal(owner.liveness, 'LIVE');
 });

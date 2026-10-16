@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const { createPresenceGate, gateSettings, STATES } = require('../electron/presence_gate');
 const { createFakeTimers } = require('./helpers/fake_timers');
 
-const OWNER = { owners:1, unknown:0, ownerScore:0.68 };
+const LIVE_OWNER_TRACK = { id:1, role:'owner', liveness:'LIVE' };
+const OWNER = { owners:1, unknown:0, ownerScore:0.68, tracks:[LIVE_OWNER_TRACK] };
 
 function setup(gate = {}, extra = {}){
   const timers = createFakeTimers(0);
@@ -39,7 +40,7 @@ function revealed(){
 test('settings defaults', () => {
   assert.deepEqual(gateSettings({}), {
     enabled:true, revealConfirmMs:1200, revealConfirmUpdates:3, absenceGraceMs:1500,
-    failsafeLockMs:0, curtainEffect:'blackout', minOwnerScore:0.363
+    failsafeLockMs:0, curtainEffect:'blackout', requireLiveness:true, minOwnerScore:0.363
   });
   assert.equal(gateSettings({ presenceGate:{ curtainEffect:'nope', revealConfirmUpdates:0 } }).curtainEffect, 'blackout');
   assert.equal(gateSettings({ presenceGate:{ revealConfirmUpdates:0 } }).revealConfirmUpdates, 1);
@@ -81,7 +82,7 @@ test('rule 2: any non-owner update resets the count', () => {
   for(const [state, payload] of [
     ['NO_USER', {}],
     ['UNKNOWN_PERSON', {}],
-    ['OWNER_PRESENT', { owners:1, unknown:0, ownerScore:0.2 }] // below threshold
+    ['OWNER_PRESENT', { owners:1, unknown:0, ownerScore:0.2, tracks:[LIVE_OWNER_TRACK] }] // below threshold
   ]){
     const t = setup();
     t.g.start();
@@ -293,4 +294,38 @@ test('updates are ignored while protection is off', () => {
   t.g.failsafe('x');
   assert.equal(t.g.state, STATES.DISABLED);
   assert.deepEqual(t.logs, []);
+});
+
+test('liveness: a SUSPECT owner face never reveals and resets verification', () => {
+  const t = setup();
+  t.g.start();
+  const suspect = { ...OWNER, tracks:[{ id:1, role:'owner', liveness:'SUSPECT' }] };
+  owner(t, 10, 400, suspect);
+  assert.equal(t.g.state, STATES.CONCEALED);
+  owner(t, 3);
+  t.g.update('OWNER_PRESENT', suspect);
+  assert.equal(t.g.state, STATES.CONCEALED);
+  assert.equal(t.logs.at(-1), 'PRESENCE_GATE|CONCEALED|reason=liveness-suspect');
+});
+
+test('liveness: UNKNOWN waits without counting, LIVE then reveals', () => {
+  const t = setup();
+  t.g.start();
+  const waiting = { ...OWNER, tracks:[{ id:1, role:'owner', liveness:'UNKNOWN' }] };
+  owner(t, 10, 400, waiting);
+  assert.equal(t.g.state, STATES.CONCEALED);
+  owner(t, 4);
+  assert.equal(t.g.state, STATES.REVEALED);
+});
+
+test('liveness: missing track data fails closed; requirement can be switched off', () => {
+  const t = setup();
+  t.g.start();
+  owner(t, 10, 400, { owners:1, unknown:0, ownerScore:0.68 });
+  assert.equal(t.g.state, STATES.CONCEALED);
+
+  const off = setup({ requireLiveness:false });
+  off.g.start();
+  owner(off, 4, 400, { owners:1, unknown:0, ownerScore:0.68 });
+  assert.equal(off.g.state, STATES.REVEALED);
 });

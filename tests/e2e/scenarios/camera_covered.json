@@ -1,0 +1,7 @@
+{ "heartbeatMs": 2000, "steps": [
+  { "at": 0, "emit": "AI_READY" },
+  { "at": 400, "state": "OWNER_PRESENT" },
+  { "at": 3000, "emit": "TAMPER|camera-covered|mean=0.0|std=0.3" },
+  { "at": 3001, "emit": "AI_ERROR|CAMERA_ERROR|The camera image is blocked or frozen (dark, mean=0.0, std=0.3)." },
+  { "at": 3050, "exit": 1 }
+] }

@@ -40,8 +40,22 @@ function describeGateEvent(raw){
   }
 }
 
+const TAMPER_TITLES = {
+  'camera-covered':'Camera covered',
+  'feed-frozen':'Camera feed frozen',
+  'camera-device-changed':'Camera device changed',
+  'config-modified':'Settings changed while protected',
+  'ai-restart-loop':'Recognition service keeps restarting',
+  'clock-jump':'System clock changed'
+};
+
 function describeEvent(raw){
   if(raw.startsWith('PRESENCE_GATE|')) return describeGateEvent(raw);
+  if(raw.startsWith('TAMPER|')){
+    const kind = field(raw,1);
+    return { type:'TAMPER', title:TAMPER_TITLES[kind] || 'Tamper detected', detail:raw.split('|').slice(2).join(' ').slice(0,80) };
+  }
+  if(raw.startsWith('CONFIG_CHANGED_SINCE_LAST_RUN|')) return { type:'SYSTEM', title:'Settings changed since last run', detail:field(raw,1,'file=') };
   if(raw === 'DEVICE_SETUP_COMPLETE') return { type:'SETUP', title:'Device setup completed' };
   if(raw.startsWith('BIOMETRIC_ENROLLED|')) return { type:'IDENTITY', title:'Owner identity enrolled', detail:field(raw,1,'samples=') };
   if(raw.startsWith('AI_STATE|STATE|OWNER_PRESENT')) return { type:'IDENTITY', title:'Owner verified' };

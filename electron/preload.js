@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getProfiles:()=>ipcRenderer.invoke('get-profiles'),
   setProfile:(name)=>ipcRenderer.invoke('set-profile',name),
   onProfileChanged:(cb)=>ipcRenderer.on('profile-changed',(_,data)=>cb(data)),
+  reportVideoDevices:(ids)=>ipcRenderer.send('video-devices',ids),
+  getDiagnostics:()=>ipcRenderer.invoke('get-diagnostics'),
+  exportDiagnostics:()=>ipcRenderer.invoke('export-diagnostics'),
 
   setIgnoreMouse:(v)=>ipcRenderer.send('set-ignore-mouse',v),
 

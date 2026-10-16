@@ -61,6 +61,48 @@ security boundary: SmartScreen may lock the session but never unlocks it or bypa
   Keyword matching is heuristic: a browser tab whose title mentions "bank" counts as Banking, and a
   sensitive page whose title has no keyword is not recognised.
 
+## Advanced security (Phase 3)
+### Liveness — a heuristic, not anti-spoofing
+`backend/liveness.py` collects weak evidence per face track: LIVE needs a blink (eye regions briefly
+brighten and recover) or head movement beyond 6° of yaw/pitch; SUSPECT on a frozen face crop or on
+screen moiré in the face's spectrum. With `presenceGate.requireLiveness` (default on) the owner must
+be LIVE before the screen is revealed; missing liveness data counts as not verified.
+- **Stops:** a printed or phone photo held still or on a stand, frozen images, static virtual-camera feeds.
+- **Does not reliably stop:** a hand-held photo that is tilted (it produces head-movement), a replayed
+  video, a 3D mask. Moiré detection depends on distance, display and camera; it is not dependable.
+- Landmark jitter limits all of this: thresholds sit above the jitter measured on synthetic data, so a
+  very still real person may stay UNKNOWN until they move or blink.
+
+### Identity smoothing
+A track is the owner when the median of its last 5 similarities is above the threshold. This removes
+per-frame flicker in both directions: one lucky frame does not make a stranger the owner, one bad frame
+does not make the owner a stranger. The cost is about 0.3 s of extra latency after identity changes.
+
+### Threat score
+`electron/threat_score.js` is an explainable sum of points (people, attention, distance, liveness,
+sensitive app) times a profile multiplier. It can only add escalation on top of the exposure-time rules.
+
+### Tamper and anomaly events
+| Event | Detection | Effect while protected |
+|---|---|---|
+| `TAMPER|camera-covered` / `TAMPER|feed-frozen` | near-black uniform or byte-identical frames for 3 s | FAILSAFE (also CAMERA_ERROR) |
+| `TAMPER|camera-device-changed` | video input set changes (renderer `devicechange`) | FAILSAFE |
+| `TAMPER|ai-restart-loop` | 3 recognition failures in 10 min | FAILSAFE |
+| `TAMPER|config-modified` | HMAC-SHA256 of `settings.json` / `policies.json` changes (key stored with `safeStorage`) | FAILSAFE |
+| `TAMPER|clock-jump` | wall clock vs. monotonic clock differ by > 5 min (reset across sleep) | FAILSAFE |
+| `CLOCK_ADJUSTED` | 30 s – 5 min difference | logged only |
+| `CONFIG_CHANGED_SINCE_LAST_RUN` | digest differs from the previous run | logged only |
+
+Limits: anyone with write access to the user profile can delete the stored digests or key (the next
+start then only reports "changed since last run"); an administrator can stop the app entirely. These
+detect tampering, they do not prevent it. All watchdog and escalation timers use the monotonic clock, so
+changing the system clock cannot make the watchdog fire or shorten a lock delay.
+
+### Local telemetry
+Counters and performance numbers stay on the device. "Export diagnostics" writes a JSON file to a path
+the user chooses; it contains counters, timings and event titles, never images, embeddings, templates
+or window titles.
+
 ## Pixelate
 While pixelate is on, the overlay is excluded from screen capture (so it can capture the screen
 underneath), which means screen sharing shows the raw screen during that time.

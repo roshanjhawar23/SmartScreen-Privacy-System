@@ -126,6 +126,7 @@ def test_blocked_camera_black_frames_are_a_camera_error(tmp_path, captured, mode
         face_detection.run_monitor(ImageCamera(clock, black), detector, recognizer, make_config(tmp_path),
                                    threading.Event(), clock=clock, sleep=clock.sleep)
     assert str(err.value).startswith("CAMERA_ERROR|The camera image is blocked or frozen (frozen")
+    assert captured[-1].startswith("TAMPER|feed-frozen|")
 
 
 def test_covered_lens_dark_noise_is_a_camera_error(tmp_path, captured, models):
@@ -137,6 +138,7 @@ def test_covered_lens_dark_noise_is_a_camera_error(tmp_path, captured, models):
         face_detection.run_monitor(ImageCamera(clock, dark), detector, recognizer, make_config(tmp_path),
                                    threading.Event(), clock=clock, sleep=clock.sleep)
     assert "(dark" in str(err.value)
+    assert captured[-1].startswith("TAMPER|camera-covered|")
 
 
 def test_live_empty_room_is_not_a_camera_error(tmp_path, captured, models):

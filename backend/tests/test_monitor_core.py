@@ -208,14 +208,14 @@ def test_no_periodic_updates_by_default():
 def test_state_message_carries_pose_and_tracks():
     from face_tracker import TrackView
 
-    owner = TrackView(1, "owner", "FACING_SCREEN", 2.0, -3.0, 4000, 4000, 4000)
-    watcher = TrackView(2, "unknown", "GLANCING", -31.2, 4.0, 1500, 0, 1200)
+    owner = TrackView(1, "owner", "FACING_SCREEN", 2.0, -3.0, 4000, 4000, 4000, "LIVE", 0.25)
+    watcher = TrackView(2, "unknown", "GLANCING", -31.2, 4.0, 1500, 0, 1200, "UNKNOWN", 0.1)
     obs = FrameObservation(owners=1, unknown=1, best_owner_score=0.6, best_unknown_score=0.1, tracks=[owner, watcher])
     event = StateTracker(confirm_frames=1).update(0.1, obs)
     assert event.state == "OWNER_AND_UNKNOWN"
     assert event.message.endswith(
         "|facing=GLANCING|yaw=-31.2|pitch=4.0"
-        "|tracks=1:O:FACING_SCREEN:2.0:-3.0:4000:4000:4000,2:U:GLANCING:-31.2:4.0:1500:0:1200"
+        "|tracks=1:O:FACING_SCREEN:2.0:-3.0:4000:4000:4000:L:0.250,2:U:GLANCING:-31.2:4.0:1500:0:1200:U:0.100"
     )
 
 
@@ -223,3 +223,37 @@ def test_state_message_without_tracks_is_unchanged():
     event = StateTracker(confirm_frames=1).update(0.1, OWNER)
     assert "tracks=" not in event.message
     assert event.message.endswith("|ownerScore=0.7100")
+
+
+# --- Phase 3: track identity, stats ----------------------------------------------
+
+def test_counts_come_from_smoothed_track_identity():
+    from face_tracker import TrackView
+    from monitor_core import apply_track_identity
+
+    owner = TrackView(1, "owner", "FACING_SCREEN", 0, 0, 1, 1, 1, "LIVE", 0.2, score=0.61)
+    stranger = TrackView(2, "unknown", "AWAY", 0, 0, 1, 0, 0, "UNKNOWN", 0.1, score=0.12)
+    # per-frame classification said 2 owners (one lucky frame); smoothed tracks say 1 + 1
+    obs = FrameObservation(owners=2, unknown=0, best_owner_score=0.7, tracks=[owner, stranger])
+    apply_track_identity(obs)
+    assert (obs.owners, obs.unknown) == (1, 1)
+    assert obs.best_owner_score == 0.61
+    assert obs.best_unknown_score == 0.12
+
+    legacy = FrameObservation(owners=1, tracks=[TrackView(1, "owner", "FACING_SCREEN", 0, 0, 1, 1, 1)])
+    apply_track_identity(legacy)
+    assert legacy.owners == 1  # no scores recorded: per-frame counts kept
+
+
+def test_stats_accumulator():
+    from monitor_core import StatsAccumulator
+
+    s = StatsAccumulator(interval=10.0, now=0.0, cpu_now=0.0)
+    for i in range(300):
+        s.frame()
+        if i % 3 == 0:
+            s.processed(20.0 if i < 270 else 80.0)
+    assert s.poll(9.9, 1.0) is None
+    line = s.poll(10.0, 2.5)
+    assert line == "STATS|fps=30.0|processedFps=10.0|recognitionMs=26.0|recognitionP95Ms=80.0|cpu=25.0"
+    assert s.poll(15.0, 3.0) is None  # reset after emitting

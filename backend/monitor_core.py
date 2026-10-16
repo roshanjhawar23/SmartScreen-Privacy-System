@@ -11,7 +11,7 @@ import sys
 import threading
 from dataclasses import dataclass, field
 
-from face_tracker import primary_track
+from face_tracker import OWNER, primary_track
 
 THREAT_STATES = ("UNKNOWN_PERSON", "UNKNOWN_GROUP", "OWNER_AND_UNKNOWN")
 
@@ -58,6 +58,53 @@ def pose_fields(tracks) -> str:
         return ""
     encoded = ",".join(t.encode() for t in tracks)
     return f"|facing={primary.facing}|yaw={primary.yaw:.1f}|pitch={primary.pitch:.1f}|tracks={encoded}"
+
+
+def apply_track_identity(obs: FrameObservation) -> FrameObservation:
+    """Owner/unknown counts and best scores from smoothed track identities (Phase 3).
+
+    Tracks only carry a score when recognition similarities were recorded; without them the
+    per-frame counts are kept as they are.
+    """
+    if not obs.tracks or any(t.score < 0 for t in obs.tracks):
+        return obs
+    owners = [t for t in obs.tracks if t.role == OWNER]
+    unknown = [t for t in obs.tracks if t.role != OWNER]
+    obs.owners, obs.unknown = len(owners), len(unknown)
+    obs.best_owner_score = max((t.score for t in owners), default=-1.0)
+    obs.best_unknown_score = max((t.score for t in unknown), default=-1.0)
+    return obs
+
+
+class StatsAccumulator:
+    """Local performance counters, emitted as one STATS line per interval (nothing leaves the device)."""
+
+    def __init__(self, interval: float = 10.0, now: float = 0.0, cpu_now: float = 0.0):
+        self.interval = float(interval)
+        self._reset(now, cpu_now)
+
+    def _reset(self, now: float, cpu_now: float) -> None:
+        self.start, self.cpu_start = now, cpu_now
+        self.frames, self.recognition_ms = 0, []
+
+    def frame(self) -> None:
+        self.frames += 1
+
+    def processed(self, recognition_ms: float) -> None:
+        self.recognition_ms.append(float(recognition_ms))
+
+    def poll(self, now: float, cpu_now: float) -> str | None:
+        elapsed = now - self.start
+        if elapsed < self.interval or elapsed <= 0:
+            return None
+        rec = sorted(self.recognition_ms)
+        avg = sum(rec) / len(rec) if rec else 0.0
+        p95 = rec[min(len(rec) - 1, int(0.95 * len(rec)))] if rec else 0.0
+        cpu = 100.0 * (cpu_now - self.cpu_start) / elapsed
+        line = (f"STATS|fps={self.frames / elapsed:.1f}|processedFps={len(rec) / elapsed:.1f}"
+                f"|recognitionMs={avg:.1f}|recognitionP95Ms={p95:.1f}|cpu={cpu:.1f}")
+        self._reset(now, cpu_now)
+        return line
 
 
 @dataclass

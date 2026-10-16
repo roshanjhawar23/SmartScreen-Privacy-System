@@ -8,6 +8,7 @@
 // {
 //   "heartbeatMs": 2000,               // AI_HEARTBEAT interval while heartbeats are on
 //   "stateUpdateMs": 400,              // face states are re-emitted like the real backend (0 = off)
+//   "autoTracks": true,                // face states without "tracks" get default tracks (owner LIVE)
 //   "steps": [
 //     { "at": 0,    "emit": "AI_READY" },
 //     { "at": 300,  "state": "OWNER_PRESENT" },          // formatted like the real backend
@@ -37,6 +38,14 @@ function formatState(state, overrides = {}){
     + `|best=${best.toFixed(4)}|ownerScore=${ownerScore.toFixed(4)}`;
 }
 
+// Default tracks like the real backend emits for each face state.
+const DEFAULT_TRACKS = {
+  OWNER_PRESENT:[{ id:1, role:'owner' }],
+  UNKNOWN_PERSON:[{ id:2, role:'unknown' }],
+  UNKNOWN_GROUP:[{ id:2, role:'unknown' }, { id:3, role:'unknown' }],
+  OWNER_AND_UNKNOWN:[{ id:1, role:'owner' }, { id:2, role:'unknown' }]
+};
+
 // tracks=... suffix like monitor_core.pose_fields; exposure grows with elapsedMs.
 function formatTracks(tracks, elapsedMs){
   if(!Array.isArray(tracks) || tracks.length === 0) return '';
@@ -47,12 +56,14 @@ function formatTracks(tracks, elapsedMs){
       id:t.id ?? 1, role:t.role === 'owner' ? 'O' : 'U', facing, yaw:Number(t.yaw ?? 0), pitch:Number(t.pitch ?? 0),
       presentMs:present,
       facingMs:facing === 'FACING_SCREEN' ? present : 0,
-      lookingMs:facing === 'AWAY' ? 0 : present
+      lookingMs:facing === 'AWAY' ? 0 : present,
+      liveness:({ LIVE:'L', SUSPECT:'S', UNKNOWN:'U' })[t.liveness || 'LIVE'] || 'U',
+      size:Number(t.size ?? 0.15)
     };
   });
   const unknown = views.filter((v) => v.role === 'U');
   const primary = (unknown.length ? unknown : views).reduce((a, b) => (b.lookingMs > a.lookingMs ? b : a));
-  const encoded = views.map((v) => `${v.id}:${v.role}:${v.facing}:${v.yaw.toFixed(1)}:${v.pitch.toFixed(1)}:${v.presentMs}:${v.facingMs}:${v.lookingMs}`).join(',');
+  const encoded = views.map((v) => `${v.id}:${v.role}:${v.facing}:${v.yaw.toFixed(1)}:${v.pitch.toFixed(1)}:${v.presentMs}:${v.facingMs}:${v.lookingMs}:${v.liveness}:${v.size.toFixed(3)}`).join(',');
   return `|facing=${primary.facing}|yaw=${primary.yaw.toFixed(1)}|pitch=${primary.pitch.toFixed(1)}|tracks=${encoded}`;
 }
 
@@ -69,6 +80,7 @@ function parseScenario(raw){
   return {
     heartbeatMs:Math.max(100, Number(scenario.heartbeatMs ?? 2000)),
     stateUpdateMs:Math.max(0, Number(scenario.stateUpdateMs ?? 400)),
+    autoTracks:scenario.autoTracks !== false,
     steps
   };
 }
@@ -86,7 +98,8 @@ function runScenario(scenario, { emit, exit, timers = { setTimeout, clearTimeout
   }
   function emitState(step){
     stopRepeat();
-    const line = (elapsedMs) => formatState(step.state, step.counts) + formatTracks(step.tracks, elapsedMs);
+    const tracks = step.tracks || (scenario.autoTracks ? DEFAULT_TRACKS[step.state] : null);
+    const line = (elapsedMs) => formatState(step.state, step.counts) + formatTracks(tracks, elapsedMs);
     emit(line(0));
     if(step.snapshot) emit(`PHOTO_SAVED|mock-snapshot-${step.at}.jpg`);
     if(scenario.stateUpdateMs > 0 && step.state !== 'NO_USER'){

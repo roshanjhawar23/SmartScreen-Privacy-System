@@ -79,8 +79,22 @@
     </div>
 
     <div class="event-row">
-      <div class="section-label">LAST EVENT</div>
+      <div class="event-row-head">
+        <span class="section-label">LAST EVENT</span>
+        <button id="diagBtn" class="link-action" type="button" aria-expanded="false">Diagnostics</button>
+      </div>
       <div id="eventList" class="event-list" aria-live="polite"></div>
+    </div>
+
+    <div id="diagPanel" class="diag-panel" hidden>
+      <div class="diag-grid">
+        <span>Camera</span><span id="diagCamera">—</span>
+        <span>Recognition</span><span id="diagRecognition">—</span>
+        <span>CPU vision / app</span><span id="diagCpu">—</span>
+        <span>Threats / locks</span><span id="diagThreats">—</span>
+        <span>Failsafe / tamper</span><span id="diagTamper">—</span>
+      </div>
+      <button id="diagExportBtn" type="button">Export diagnostics</button>
     </div>
 
     <button id="identityBtn" class="identity-action" type="button">Enroll Owner</button>

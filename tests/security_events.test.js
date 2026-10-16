@@ -93,6 +93,16 @@ test('policy decisions show their reason', () => {
   assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - THREAT_LOCK_TRIGGERED').title, 'Threat lock triggered');
 });
 
+test('tamper events have their own titles', () => {
+  const title = (raw) => parseLogLine(`2026-10-01T10:00:00.000Z - ${raw}`).title;
+  assert.equal(title('TAMPER|camera-covered|mean=0.0|std=0.3'), 'Camera covered');
+  assert.equal(title('TAMPER|config-modified|file=settings.json'), 'Settings changed while protected');
+  assert.equal(title('TAMPER|clock-jump|deltaMs=3600000'), 'System clock changed');
+  assert.equal(title('TAMPER|something-new'), 'Tamper detected');
+  assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - TAMPER|camera-covered|mean=0').type, 'TAMPER');
+  assert.equal(title('CONFIG_CHANGED_SINCE_LAST_RUN|file=policies.json'), 'Settings changed since last run');
+});
+
 test('log values cannot inject extra lines', () => {
   const line = formatLogLine('LOCK_REQUESTED|reason=x\n2026-01-01T00:00:00.000Z - AI_STATE|STATE|OWNER_PRESENT', new Date(0));
   assert.equal(line.split('\n').filter(Boolean).length, 1);
