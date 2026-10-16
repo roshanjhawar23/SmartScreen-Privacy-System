@@ -7,6 +7,7 @@ unit-tested without OpenCV, a webcam or real sleeps.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 from dataclasses import dataclass, field
@@ -291,6 +292,42 @@ class LoopHeartbeat:
     def should_beat(self, now: float) -> bool:
         with self._lock:
             return (now - self._last_tick) <= self.stall_timeout
+
+
+# Intruder snapshots are named by save_intruder_snapshot: YYYYMMDD_HHMMSS_mmm.jpg
+EVIDENCE_NAME = re.compile(r"^\d{8}_\d{6}_\d{3}\.jpg$")
+
+
+@dataclass(frozen=True)
+class EvidenceConfig:
+    enabled: bool = True
+    max_images: int = 30     # newest N kept, older ones deleted
+    max_width: int = 320     # images are downscaled to this width (small files)
+    jpeg_quality: int = 70
+
+    @classmethod
+    def from_dict(cls, raw: dict | None) -> "EvidenceConfig":
+        raw = raw if isinstance(raw, dict) else {}
+
+        def number(key, default, low, high):
+            try:
+                return int(min(high, max(low, int(raw.get(key, default)))))
+            except (TypeError, ValueError):
+                return default
+
+        return cls(
+            enabled=raw.get("enabled") is not False,
+            max_images=number("maxImages", 30, 1, 1000),
+            max_width=number("maxWidth", 320, 160, 1280),
+            jpeg_quality=number("jpegQuality", 70, 40, 95),
+        )
+
+
+def evidence_to_delete(names, keep: int) -> list[str]:
+    """Oldest snapshot names beyond the newest ``keep``. Only our own file names are considered,
+    so nothing else in the folder is ever deleted. Names sort chronologically."""
+    ours = sorted(n for n in names if EVIDENCE_NAME.match(n))
+    return ours[: max(0, len(ours) - max(1, int(keep)))]
 
 
 def default_log_dir() -> str:

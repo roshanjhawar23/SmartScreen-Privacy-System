@@ -121,6 +121,17 @@ or window titles.
   administrator from ending the process or editing the file.
 - **Settings transfer:** see `docs/design/cross-device.md` (passphrase encryption, allow-list, no faces).
 
+## Security images (intruder snapshots)
+- On by default: when an unrecognized face first appears, one photo of the whole scene is saved to
+  `userData/intruder_logs/` (outside the repository, never committed), for the owner's own review.
+- **Small and bounded** (`settings.json → evidence`): downscaled to 320 px wide, JPEG quality 70
+  (about 10–20 KB each), and only the newest 30 are kept; older ones are deleted automatically when a
+  new one is saved and when protection starts. Only SmartScreen's own `YYYYMMDD_HHMMSS_mmm.jpg` files are
+  ever deleted. `"enabled": false` turns the feature off.
+- The images show whoever was in front of the camera, possibly including the owner (e.g. while being
+  re-recognized). They are not encrypted; anyone with access to the Windows account can open them.
+  Diagnostics shows how many are kept and opens the folder.
+
 ## Pixelate
 While pixelate is on, the overlay is excluded from screen capture (so it can capture the screen
 underneath), which means screen sharing shows the raw screen during that time.

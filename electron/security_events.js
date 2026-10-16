@@ -61,6 +61,7 @@ function describeEvent(raw){
   if(raw.startsWith('PROFILE_SAVED|')) return { type:'SYSTEM', title:`Profile saved: ${field(raw,1,'profile=')}` };
   if(raw.startsWith('PROFILE_DELETED|')) return { type:'SYSTEM', title:`Profile deleted: ${field(raw,1,'profile=')}` };
   if(raw.startsWith('ENTERPRISE_REFUSED|')) return { type:'SYSTEM', title:'Blocked by organization policy', detail:field(raw,1,'action=') };
+  if(raw === 'EVIDENCE_FOLDER_OPENED') return { type:'EVIDENCE', title:'Security images folder opened' };
   if(raw.startsWith('SETTINGS_EXPORTED|')) return { type:'SYSTEM', title:'Settings exported' };
   if(raw.startsWith('SETTINGS_IMPORTED|')) return { type:'SYSTEM', title:'Settings imported' };
   if(raw.startsWith('CONFIG_CHANGED_SINCE_LAST_RUN|')) return { type:'SYSTEM', title:'Settings changed since last run', detail:field(raw,1,'file=') };

@@ -497,6 +497,8 @@ async function refreshDiagnostics() {
     setText('diagCpu', `${b ? n(b.cpu, 0) : '—'} % / ${n(d.electron?.cpuPercent, 0)} %`);
     setText('diagThreats', `${c.threats ?? 0} / ${c.lockRequests ?? 0}`);
     setText('diagTamper', `${c.failsafes ?? 0} / ${c.tamperEvents ?? 0}`);
+    const evidence = await window.electronAPI.getEvidenceInfo();
+    if (evidence) setText('diagEvidence', evidence.enabled ? `${evidence.count} of ${evidence.maxImages} kept` : 'off');
   } catch {}
 }
 
@@ -511,6 +513,11 @@ diagBtn?.addEventListener('click', () => {
     clearInterval(diagTimer);
     diagTimer = null;
   }
+});
+
+document.getElementById('evidenceFolderBtn')?.addEventListener('click', async () => {
+  const result = await window.electronAPI.openEvidenceFolder();
+  if (!result?.ok) showSecurityNotification('Could not open the images folder');
 });
 
 diagExportBtn?.addEventListener('click', async () => {

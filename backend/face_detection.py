@@ -16,8 +16,10 @@ from liveness import LivenessConfig, LivenessSample
 from monitor_core import (
     CameraHealth,
     Emitter,
+    EvidenceConfig,
     FrameObservation,
     ImageHealth,
+    evidence_to_delete,
     StatsAccumulator,
     apply_track_identity,
     LoopHeartbeat,
@@ -88,6 +90,7 @@ def parse_config(raw: dict) -> dict:
     config["stateUpdateInterval"] = max(0.0, float(config.get("stateUpdateInterval", 0.4)))
     config["cameraFailureTimeout"] = max(0.5, float(config.get("cameraFailureTimeout", CAMERA_FAILURE_TIMEOUT)))
     config["headPose"] = PoseConfig.from_dict(config.get("headPose") if isinstance(config.get("headPose"), dict) else None)
+    config["evidence"] = EvidenceConfig.from_dict(config.get("evidence"))
     config["liveness"] = LivenessConfig.from_dict(config.get("liveness") if isinstance(config.get("liveness"), dict) else None)
     config["statsInterval"] = max(1.0, float(config.get("statsInterval", 10.0)))
     config["logDir"] = str(config.get("logDir") or default_log_dir())
@@ -117,13 +120,35 @@ def stop_listener() -> None:
             return
 
 
-def save_intruder_snapshot(frame: np.ndarray, log_dir: str) -> str | None:
+def prune_evidence(log_dir: str, keep: int) -> int:
+    """Delete the oldest snapshots beyond the newest ``keep``. Returns how many were deleted."""
+    try:
+        names = os.listdir(log_dir)
+    except OSError:
+        return 0
+    deleted = 0
+    for name in evidence_to_delete(names, keep):
+        try:
+            os.remove(os.path.join(log_dir, name))
+            deleted += 1
+        except OSError:
+            pass
+    return deleted
+
+
+def save_intruder_snapshot(frame: np.ndarray, log_dir: str, evidence: EvidenceConfig = EvidenceConfig()) -> str | None:
+    """Small JPEG of the whole scene (downscaled to max_width), then keep only the newest images."""
     os.makedirs(log_dir, exist_ok=True)
+    height, width = frame.shape[:2]
+    if width > evidence.max_width:
+        scale = evidence.max_width / float(width)
+        frame = cv2.resize(frame, (evidence.max_width, max(1, int(round(height * scale)))), interpolation=cv2.INTER_AREA)
     filename = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3] + ".jpg"
     path = os.path.join(log_dir, filename)
-    if cv2.imwrite(path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 88]):
-        return path
-    return None
+    if not cv2.imwrite(path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), evidence.jpeg_quality]):
+        return None
+    prune_evidence(log_dir, evidence.max_images)
+    return path
 
 
 def heartbeat_loop(heartbeat: LoopHeartbeat, stop_event: threading.Event, clock=time.monotonic) -> None:
@@ -216,6 +241,7 @@ def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None
     )
     camera_health = CameraHealth(failure_timeout=float(config["cameraFailureTimeout"]))
     image_health = ImageHealth(failure_timeout=float(config["cameraFailureTimeout"]))
+    prune_evidence(config["logDir"], config["evidence"].max_images)  # also trims older, larger sets
     face_tracker = FaceTracker(owner_threshold=float(config["threshold"]), liveness_config=config["liveness"])
     stats = StatsAccumulator(float(config["statsInterval"]), now=clock(), cpu_now=time.process_time())
     frame_counter = 0
@@ -267,8 +293,8 @@ def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None
             continue
 
         emit(event.message)
-        if event.snapshot:
-            snapshot_path = save_intruder_snapshot(frame, config["logDir"])
+        if event.snapshot and config["evidence"].enabled:
+            snapshot_path = save_intruder_snapshot(frame, config["logDir"], config["evidence"])
             if snapshot_path:
                 emit(f"PHOTO_SAVED|{snapshot_path}")
             else:

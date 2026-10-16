@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   reportVideoDevices:(ids)=>ipcRenderer.send('video-devices',ids),
   getDiagnostics:()=>ipcRenderer.invoke('get-diagnostics'),
   exportDiagnostics:()=>ipcRenderer.invoke('export-diagnostics'),
+  getEvidenceInfo:()=>ipcRenderer.invoke('get-evidence-info'),
+  openEvidenceFolder:()=>ipcRenderer.invoke('open-evidence-folder'),
   getTrustedPeople:()=>ipcRenderer.invoke('get-trusted-people'),
   enrollTrustedPerson:(request)=>ipcRenderer.invoke('enroll-trusted-person',request),
   renameTrustedPerson:(id,name)=>ipcRenderer.invoke('rename-trusted-person',id,name),

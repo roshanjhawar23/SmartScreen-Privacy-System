@@ -1,4 +1,4 @@
-const { app, BrowserWindow, globalShortcut, ipcMain, Tray, Menu, dialog, session, safeStorage, screen, desktopCapturer, powerMonitor } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, Tray, Menu, dialog, session, safeStorage, screen, desktopCapturer, powerMonitor, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
@@ -1178,6 +1178,7 @@ function startAI(){
     cameraFailureTimeout: Math.max(0.5, Number(cfg.cameraFailureTimeout ?? 3)),
     stateUpdateInterval: Math.max(0, Number(cfg.aiStateUpdateInterval ?? 0.4)),
     headPose: cfg.headPose || {},
+    evidence: cfg.evidence || {},
     logDir: logPath
   };
   // The backend ignores cameraSource unless SMARTSCREEN_TEST=1 is set too.
@@ -1472,6 +1473,25 @@ ipcMain.on('lock-screen',(_event, reason)=>{
 });
 ipcMain.handle('get-security-events',(_event,limit)=>readSecurityEvents(activityLogFile(),limit));
 ipcMain.handle('get-last-intruder-image',()=>lastIntruderImage);
+
+// Security images (intruder snapshots): count and the folder, for the owner. Small JPEGs; the
+// backend keeps only the newest evidence.maxImages.
+const EVIDENCE_NAME = /^\d{8}_\d{6}_\d{3}\.jpg$/;
+function evidenceFolder(){
+  return path.join(app.getPath('userData'),'intruder_logs');
+}
+ipcMain.handle('get-evidence-info',()=>{
+  let count = 0;
+  try{ count = fs.readdirSync(evidenceFolder()).filter((n)=>EVIDENCE_NAME.test(n)).length; }catch{}
+  const evidence = effectiveSettings().evidence || {};
+  return { count, maxImages:Number(evidence.maxImages ?? 30), enabled:evidence.enabled !== false };
+});
+ipcMain.handle('open-evidence-folder',async()=>{
+  fs.mkdirSync(evidenceFolder(),{recursive:true});
+  const error = await shell.openPath(evidenceFolder());
+  if(!error) writeLog('EVIDENCE_FOLDER_OPENED');
+  return { ok:!error, error:error || null };
+});
 
 app.on('second-instance',()=>{
   if(win && !win.isDestroyed()){

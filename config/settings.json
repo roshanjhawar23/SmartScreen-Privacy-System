@@ -24,5 +24,11 @@
     "facingPitch": 20,
     "glancingYaw": 45,
     "glancingPitch": 35
+  },
+  "evidence": {
+    "enabled": true,
+    "maxImages": 30,
+    "maxWidth": 320,
+    "jpegQuality": 70
   }
 }
