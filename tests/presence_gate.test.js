@@ -218,6 +218,11 @@ test('rule 7: session lock, unlock and resume re-conceal; reveal again needs ver
     const t = revealed();
     t.g[event]();
     assert.equal(t.g.state, STATES.CONCEALED, event);
+    if(event === 'sessionLocked'){
+      owner(t, 4);
+      assert.equal(t.g.state, STATES.CONCEALED, 'no reveal while locked');
+      t.g.sessionUnlocked();
+    }
     owner(t, 4);
     assert.equal(t.g.state, STATES.REVEALED, event);
   }
@@ -225,6 +230,17 @@ test('rule 7: session lock, unlock and resume re-conceal; reveal again needs ver
   f.g.failsafe('camera-error');
   f.g.sessionUnlocked();
   assert.equal(f.g.state, STATES.FAILSAFE); // unlock never clears a failure
+});
+
+test('rule 7: no reveal while the Windows session is locked, even if already concealed', () => {
+  const t = setup();
+  t.g.start();
+  t.g.sessionLocked(); // already CONCEALED: no transition, but the lock is remembered
+  owner(t, 10);
+  assert.equal(t.g.state, STATES.CONCEALED);
+  t.g.sessionUnlocked();
+  owner(t, 4);
+  assert.equal(t.g.state, STATES.REVEALED);
 });
 
 test('rule 8: curtain effect comes from settings', () => {

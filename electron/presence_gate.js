@@ -51,6 +51,7 @@ function createPresenceGate(deps = {}){
   let state = STATES.DISABLED;
   let reason = 'initial';
   let active = false;
+  let sessionLocked = false; // never reveal behind a locked Windows session
   let enabled = gateSettings(getSettings()).enabled;
   let verifyCount = 0;
   let verifyStart = 0;
@@ -96,6 +97,7 @@ function createPresenceGate(deps = {}){
 
   function ownerUpdate(){
     const now = timers.now();
+    if(sessionLocked) return;
     if(state === STATES.REVEALED || (state === STATES.DISABLED && !enabled)) return;
     if(state === STATES.ABSENCE_GRACE){
       transition(STATES.REVEALED, 'owner-returned');
@@ -187,8 +189,14 @@ function createPresenceGate(deps = {}){
       transition(STATES.CONCEALED, 'retry');
       return true;
     },
-    sessionLocked(){ if(active) conceal('session-locked'); },
-    sessionUnlocked(){ if(active) conceal('session-unlocked'); },
+    sessionLocked(){
+      sessionLocked = true;
+      if(active) conceal('session-locked');
+    },
+    sessionUnlocked(){
+      sessionLocked = false;
+      if(active) conceal('session-unlocked');
+    },
     resumed(){ if(active) conceal('system-resumed'); },
     // The toggle can only change while protection is off (rule 6: no silent curtain removal).
     setEnabled(value){
