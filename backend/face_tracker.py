@@ -77,6 +77,8 @@ class _Track:
     facing_since: float | None = None
     looking_since: float | None = None
     lost_at: float | None = None
+    role: str | None = None          # last reported role
+    role_since: float | None = None  # when it last changed
 
 
 def iou(a, b) -> float:
@@ -180,11 +182,17 @@ class FaceTracker:
         return (OWNER if score >= self.owner_threshold else UNKNOWN), score
 
     def _view(self, t: _Track, now: float) -> TrackView:
-        ms = lambda since: int(round((now - since) * 1000)) if since is not None else 0  # noqa: E731
         d = t.detection
         role, score = self._role(t)
-        return TrackView(t.id, role, d.facing, d.yaw, d.pitch, ms(t.first_seen), ms(t.facing_since),
-                         ms(t.looking_since), t.liveness_state, d.size, score)
+        if role != t.role:
+            t.role, t.role_since = role, now
+        # Exposure counts from the later of "started facing" and "became this role": a face
+        # re-classified from owner to unknown starts its threat timeline now, not when the
+        # (same) track first appeared. Live check 2026-10-16: 85 s carried over → instant lock.
+        start = lambda since: None if since is None else max(since, t.role_since)  # noqa: E731
+        ms = lambda since: int(round((now - since) * 1000)) if since is not None else 0  # noqa: E731
+        return TrackView(t.id, role, d.facing, d.yaw, d.pitch, ms(start(t.first_seen)), ms(start(t.facing_since)),
+                         ms(start(t.looking_since)), t.liveness_state, d.size, score)
 
 
 def primary_track(views: list[TrackView]) -> TrackView | None:

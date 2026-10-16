@@ -131,3 +131,18 @@ def test_liveness_is_tracked_per_face():
     assert view.encode().endswith(":L:0.150")
     assert t.pop_liveness_changes() == [(1, "LIVE", "head-movement")]
     assert t.pop_liveness_changes() == []
+
+
+def test_exposure_restarts_when_a_track_becomes_unknown():
+    """Live check 2026-10-16: the owner put on glasses after 85 s; the same track turned unknown
+    and its 85 s of facing time made the policy lock instantly. Exposure must restart."""
+    t = FaceTracker(owner_threshold=0.363)
+    view = None
+    for i in range(20):  # 2 s as the owner, facing
+        view = t.update(i * 0.1, [det_sim(100, 0.65)])[0]
+    assert view.role == OWNER and view.facing_ms == 1900
+    for i in range(20, 26):  # similarity drops (glasses): median flips to unknown at the 3rd low sample
+        view = t.update(i * 0.1, [det_sim(100, 0.2)])[0]
+    assert view.role == UNKNOWN
+    assert view.facing_ms <= 400 and view.present_ms <= 400  # not 2500
+    assert view.id == 1  # same track
