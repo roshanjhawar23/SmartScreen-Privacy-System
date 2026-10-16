@@ -83,7 +83,7 @@ for(const [mock, label] of [
     const state = { threat_lock:'UNKNOWN_PERSON', unknown_group:'UNKNOWN_GROUP', owner_and_unknown:'OWNER_AND_UNKNOWN' }[mock];
     h.expectEventOrder(h.readEvents(logFile), [
       'AI_STATE|STATE|OWNER_PRESENT', `AI_STATE|STATE|${state}`, 'PHOTO_SAVED|',
-      'THREAT_FOCUS_ACTIVATED', 'THREAT_LOCK_TIMER_EXPIRED', 'LOCK_REQUESTED|reason=privacy-threat',
+      'THREAT_FOCUS_ACTIVATED', 'THREAT_LOCK_TRIGGERED', 'LOCK_REQUESTED|reason=privacy-threat',
       'TEST_LOCK_SIMULATED|reason=privacy-threat'
     ]);
   });

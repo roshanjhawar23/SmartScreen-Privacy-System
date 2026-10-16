@@ -44,6 +44,23 @@ security boundary: SmartScreen may lock the session but never unlocks it or bypa
 - Anyone at the keyboard can disable protection (with a confirmation) or quit the app; SmartScreen
   does not authenticate that person. It never unlocks Windows.
 
+## Intelligent privacy (Phase 2)
+- **Head pose is an estimate.** Yaw and pitch come from 5 detector landmarks on a generic face model
+  (`backend/head_pose.py`), accurate to a few degrees on synthetic data and less on real faces
+  (glasses, hair, low light, unusual camera placement). `FACING_SCREEN` / `GLANCING` / `AWAY` are
+  thresholds on that estimate, configurable in `settings.json → headPose` (`pitchOffset` for a camera
+  above or below the screen). A face turned beyond ~60–70° is usually not detected at all and then
+  counts as no person.
+- **Exposure** is measured per face track (IoU tracker). Two people crossing can swap or restart
+  tracks, which restarts their exposure time; Phase 3 adds embedding-based tracking.
+- **Policies are not a guarantee of escalation order.** The Presence Gate still conceals immediately
+  for any unrecognized face; profiles only change how fast blur, focus and lock follow.
+- **Foreground-app awareness** reads the foreground window's process name and title once per second,
+  only while protection is on. Titles are matched against keywords in memory and are **never written
+  to the log**; the log only records the category and app name (for example "Email / Outlook").
+  Keyword matching is heuristic: a browser tab whose title mentions "bank" counts as Banking, and a
+  sensitive page whose title has no keyword is not recognised.
+
 ## Pixelate
 While pixelate is on, the overlay is excluded from screen capture (so it can capture the screen
 underneath), which means screen sharing shows the raw screen during that time.

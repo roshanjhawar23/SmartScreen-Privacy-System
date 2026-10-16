@@ -201,3 +201,25 @@ def test_periodic_updates_reset_on_change():
 
 def test_no_periodic_updates_by_default():
     assert len(feed(StateTracker(confirm_frames=1), [OWNER] * 30)) == 1
+
+
+# --- pose / tracks in STATE messages ------------------------------------------
+
+def test_state_message_carries_pose_and_tracks():
+    from face_tracker import TrackView
+
+    owner = TrackView(1, "owner", "FACING_SCREEN", 2.0, -3.0, 4000, 4000, 4000)
+    watcher = TrackView(2, "unknown", "GLANCING", -31.2, 4.0, 1500, 0, 1200)
+    obs = FrameObservation(owners=1, unknown=1, best_owner_score=0.6, best_unknown_score=0.1, tracks=[owner, watcher])
+    event = StateTracker(confirm_frames=1).update(0.1, obs)
+    assert event.state == "OWNER_AND_UNKNOWN"
+    assert event.message.endswith(
+        "|facing=GLANCING|yaw=-31.2|pitch=4.0"
+        "|tracks=1:O:FACING_SCREEN:2.0:-3.0:4000:4000:4000,2:U:GLANCING:-31.2:4.0:1500:0:1200"
+    )
+
+
+def test_state_message_without_tracks_is_unchanged():
+    event = StateTracker(confirm_frames=1).update(0.1, OWNER)
+    assert "tracks=" not in event.message
+    assert event.message.endswith("|ownerScore=0.7100")

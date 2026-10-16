@@ -134,3 +134,45 @@ test('owner together with an unknown person does not cancel the threat', () => {
   t.timers.advance(5000);
   assert.deepEqual(t.locks, ['privacy-threat']);
 });
+
+test('threat escalation follows the policy decision and only escalates', () => {
+  const timers = createFakeTimers(0);
+  const actions = [];
+  const logs = [];
+  const locks = [];
+  let next = 'NONE';
+  const seq = createProtectionSequence({
+    getSettings:() => ({}),
+    sendAction:(a) => actions.push(a),
+    log:(l) => logs.push(l),
+    lock:(r) => locks.push(r),
+    evaluateThreat:() => ({ action:next, reason:`policy says ${next}`, factors:[] }),
+    timers
+  });
+  seq.updateForState('UNKNOWN_PERSON', {});
+  assert.deepEqual(actions, []); // policy: just watch
+  next = 'FOCUS';
+  timers.advance(250);
+  assert.deepEqual(actions, ['FOCUS']);
+  assert.ok(logs.includes('POLICY_DECISION|action=FOCUS|reason=policy says FOCUS'));
+  next = 'BLUR'; // no de-escalation within a threat
+  timers.advance(1000);
+  assert.deepEqual(actions, ['FOCUS']);
+  next = 'LOCK';
+  seq.updateForState('UNKNOWN_PERSON', {}); // a backend update re-evaluates immediately
+  assert.deepEqual(locks, ['privacy-threat']);
+  assert.equal(timers.pendingCount, 0);
+});
+
+test('default evaluator (no profiles) ages track data between updates; presence uses the same thresholds', () => {
+  const run = (track) => {
+    const t = setup();
+    t.seq.updateForState('UNKNOWN_PERSON', { tracks:[track] });
+    t.timers.advance(5000); // tracks age between updates
+    return { actions:t.actions, locks:t.locks };
+  };
+  const watcher = run({ id:2, role:'unknown', facing:'FACING_SCREEN', presentMs:100, facingMs:100, lookingMs:100 });
+  assert.deepEqual(watcher.locks, ['privacy-threat']);
+  const passer = run({ id:2, role:'unknown', facing:'AWAY', presentMs:100, facingMs:0, lookingMs:0 });
+  assert.deepEqual(passer.locks, ['privacy-threat']); // slower presence rules come from profiles (policy_engine tests)
+});

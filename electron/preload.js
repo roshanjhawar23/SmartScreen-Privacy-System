@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPresenceGate:()=>ipcRenderer.invoke('get-presence-gate'),
   setPresenceGate:(enabled)=>ipcRenderer.invoke('set-presence-gate',enabled),
   retryProtection:()=>ipcRenderer.send('retry-protection'),
+  getProfiles:()=>ipcRenderer.invoke('get-profiles'),
+  setProfile:(name)=>ipcRenderer.invoke('set-profile',name),
+  onProfileChanged:(cb)=>ipcRenderer.on('profile-changed',(_,data)=>cb(data)),
 
   setIgnoreMouse:(v)=>ipcRenderer.send('set-ignore-mouse',v),
 

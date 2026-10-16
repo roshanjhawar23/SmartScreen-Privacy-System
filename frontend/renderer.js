@@ -435,6 +435,33 @@ retryBtn?.addEventListener('click', () => {
   window.electronAPI.retryProtection();
 });
 
+const profileSelect = document.getElementById('profileSelect');
+
+function applyProfiles(info) {
+  if (!profileSelect || !info || !Array.isArray(info.names)) return;
+  const current = Array.from(profileSelect.options || []).map((o) => o.value).join('|');
+  if (current !== info.names.join('|')) {
+    profileSelect.replaceChildren();
+    for (const name of info.names) {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      profileSelect.appendChild(option);
+    }
+  }
+  profileSelect.value = info.active;
+}
+
+profileSelect?.addEventListener('change', async () => {
+  applyProfiles(await window.electronAPI.setProfile(profileSelect.value));
+  refreshSecurityEvents();
+});
+
+window.electronAPI.onProfileChanged((info) => {
+  applyProfiles(info);
+  refreshSecurityEvents();
+});
+
 window.electronAPI.onPresenceGate((snapshot) => {
   applyGate(snapshot);
   refreshSecurityEvents();
@@ -667,6 +694,7 @@ window.electronAPI.onBiometricUpdated(() => {
 // Startup — runs exactly once.
 setIntensity(intensityLevel);
 setGateEnabled(loadGatePreference());
+Promise.resolve(window.electronAPI.getProfiles()).then(applyProfiles).catch(() => {});
 refreshBiometricStatus();
 refreshSecurityEvents();
 setInterval(() => { if (aiEnabled) refreshSecurityEvents(); }, 5000);

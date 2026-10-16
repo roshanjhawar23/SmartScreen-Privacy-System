@@ -12,6 +12,8 @@
 //     { "at": 0,    "emit": "AI_READY" },
 //     { "at": 300,  "state": "OWNER_PRESENT" },          // formatted like the real backend
 //     { "at": 2000, "state": "UNKNOWN_PERSON", "snapshot": true },
+//     { "at": 2000, "state": "UNKNOWN_PERSON", "tracks": [{ "id": 2, "role": "unknown", "facing": "AWAY", "yaw": 60 }] },
+//        // tracks: exposure (presentMs/facingMs/lookingMs) grows from the step's start, like face_tracker.py
 //     { "at": 4000, "heartbeat": false },                // simulate a hung vision loop (all output stops)
 //     { "at": 5000, "emit": "AI_ERROR|CAMERA_ERROR|..." },
 //     { "at": 5050, "exit": 1 }
@@ -33,6 +35,25 @@ function formatState(state, overrides = {}){
   const best = counts.owners > 0 ? ownerScore : Number(overrides.best ?? 0.12);
   return `STATE|${state}|faces=${counts.faces}|owners=${counts.owners}|unknown=${counts.unknown}`
     + `|best=${best.toFixed(4)}|ownerScore=${ownerScore.toFixed(4)}`;
+}
+
+// tracks=... suffix like monitor_core.pose_fields; exposure grows with elapsedMs.
+function formatTracks(tracks, elapsedMs){
+  if(!Array.isArray(tracks) || tracks.length === 0) return '';
+  const views = tracks.map((t) => {
+    const facing = t.facing || 'FACING_SCREEN';
+    const present = Math.round(elapsedMs + (t.presentOffsetMs || 0));
+    return {
+      id:t.id ?? 1, role:t.role === 'owner' ? 'O' : 'U', facing, yaw:Number(t.yaw ?? 0), pitch:Number(t.pitch ?? 0),
+      presentMs:present,
+      facingMs:facing === 'FACING_SCREEN' ? present : 0,
+      lookingMs:facing === 'AWAY' ? 0 : present
+    };
+  });
+  const unknown = views.filter((v) => v.role === 'U');
+  const primary = (unknown.length ? unknown : views).reduce((a, b) => (b.lookingMs > a.lookingMs ? b : a));
+  const encoded = views.map((v) => `${v.id}:${v.role}:${v.facing}:${v.yaw.toFixed(1)}:${v.pitch.toFixed(1)}:${v.presentMs}:${v.facingMs}:${v.lookingMs}`).join(',');
+  return `|facing=${primary.facing}|yaw=${primary.yaw.toFixed(1)}|pitch=${primary.pitch.toFixed(1)}|tracks=${encoded}`;
 }
 
 function parseScenario(raw){
@@ -65,11 +86,12 @@ function runScenario(scenario, { emit, exit, timers = { setTimeout, clearTimeout
   }
   function emitState(step){
     stopRepeat();
-    const line = formatState(step.state, step.counts);
-    emit(line);
+    const line = (elapsedMs) => formatState(step.state, step.counts) + formatTracks(step.tracks, elapsedMs);
+    emit(line(0));
     if(step.snapshot) emit(`PHOTO_SAVED|mock-snapshot-${step.at}.jpg`);
     if(scenario.stateUpdateMs > 0 && step.state !== 'NO_USER'){
-      repeat = timers.setInterval(() => emit(line), scenario.stateUpdateMs);
+      let count = 0;
+      repeat = timers.setInterval(() => emit(line(++count * scenario.stateUpdateMs)), scenario.stateUpdateMs);
     }
   }
 
@@ -139,4 +161,4 @@ function main(){
 
 if(require.main === module) main();
 
-module.exports = { formatState, parseScenario, runScenario };
+module.exports = { formatState, formatTracks, parseScenario, runScenario };

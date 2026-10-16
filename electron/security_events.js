@@ -54,7 +54,13 @@ function describeEvent(raw){
   if(raw === 'WALK_AWAY_FOCUS_ACTIVATED') return { type:'ACTION', title:'Privacy focus activated' };
   if(raw === 'WALK_AWAY_TIMER_EXPIRED') return { type:'ACTION', title:'Walk-away timer expired' };
   if(raw === 'THREAT_FOCUS_ACTIVATED') return { type:'ACTION', title:'Privacy focus activated' };
-  if(raw.startsWith('THREAT_LOCK_TIMER_EXPIRED')) return { type:'ACTION', title:'Threat lock timer expired' };
+  if(raw.startsWith('THREAT_LOCK_TIMER_EXPIRED')) return { type:'ACTION', title:'Threat lock timer expired' }; // logs before Phase 2
+  if(raw === 'THREAT_LOCK_TRIGGERED') return { type:'ACTION', title:'Threat lock triggered' };
+  if(raw.startsWith('POLICY_DECISION|')){
+    const reason = raw.split('|').slice(2).join('|').replace(/^reason=/, '');
+    return { type:'ACTION', title:reason || 'Privacy action', detail:field(raw,1,'action=') };
+  }
+  if(raw.startsWith('PROFILE_CHANGED|')) return { type:'SYSTEM', title:`Privacy profile: ${field(raw,1,'profile=')}` };
   if(raw.startsWith('LOCK_REQUESTED|')) return { type:'ACTION', title:'Screen lock requested', detail:field(raw,1,'reason=') };
   if(raw.startsWith('LOCK_COMMAND_COMPLETED|')) return { type:'ACTION', title:'Screen locked', detail:field(raw,1,'reason=') };
   if(raw.startsWith('TEST_LOCK_SIMULATED|')) return { type:'ACTION', title:'Screen lock simulated (test mode)', detail:field(raw,1,'reason=') };

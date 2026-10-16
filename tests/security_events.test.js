@@ -85,6 +85,14 @@ test('presence gate events have readable titles', () => {
   assert.equal(title('PRESENCE_GATE|ABSENCE_GRACE|reason=no-user'), null);
 });
 
+test('policy decisions show their reason', () => {
+  const e = parseLogLine('2026-10-01T10:00:00.000Z - POLICY_DECISION|action=FOCUS|reason=Focus mode: unknown person facing the screen for 3.1 s (Office profile)');
+  assert.equal(e.title, 'Focus mode: unknown person facing the screen for 3.1 s (Office profile)');
+  assert.equal(e.detail, 'FOCUS');
+  assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - PROFILE_CHANGED|profile=Public|source=tray').title, 'Privacy profile: Public');
+  assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - THREAT_LOCK_TRIGGERED').title, 'Threat lock triggered');
+});
+
 test('log values cannot inject extra lines', () => {
   const line = formatLogLine('LOCK_REQUESTED|reason=x\n2026-01-01T00:00:00.000Z - AI_STATE|STATE|OWNER_PRESENT', new Date(0));
   assert.equal(line.split('\n').filter(Boolean).length, 1);

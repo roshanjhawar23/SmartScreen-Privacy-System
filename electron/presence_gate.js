@@ -205,6 +205,8 @@ function createPresenceGate(deps = {}){
       onChange(snapshot());
       return true;
     },
+    // Settings changed (e.g. profile switch → curtain effect): re-publish the snapshot.
+    refresh(){ onChange(snapshot()); },
     get state(){ return state; },
     get curtain(){ return CURTAIN_STATES.has(state); },
     snapshot

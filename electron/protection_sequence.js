@@ -1,11 +1,30 @@
 // Automatic protection escalation (walk-away and threat sequences).
 // Pure: no Electron imports. Timers, clock and side effects are injected.
+//
+// Threat escalation is decided by the policy engine (Phase 2): while a threat lasts, the
+// latest backend update is re-evaluated every 250 ms and the sequence only escalates
+// (BLUR → FOCUS → LOCK). Each escalation is logged with its reason.
+
+const { decide, ACTIONS } = require('./policy_engine');
 
 const THREAT_STATES = new Set(['UNKNOWN_PERSON','UNKNOWN_GROUP','OWNER_AND_UNKNOWN']);
+const THREAT_TICK_MS = 250;
 
 function numberSetting(value, fallback){
   const n = Number(value ?? fallback);
   return Number.isFinite(n) ? n : fallback;
+}
+
+// Default evaluator (no profiles): Phase 1 timings from settings, with track data if present.
+function settingsEvaluator(getSettings){
+  return ({ state, payload, threatMs, ageMs }) => {
+    const s = getSettings();
+    const focusMs = Math.max(0, numberSetting(s.intruderFocusDelay, 3000));
+    const lockMs = Math.max(focusMs, numberSetting(s.intruderLockDelay, 5000));
+    const t = { blurMs:0, focusMs, lockMs };
+    const profile = { glancingCounts:true, escalation:t, sensitiveEscalation:t, notLooking:t };
+    return decide({ state, tracks:payload?.tracks, profile, profileName:'Default', threatMs, ageMs });
+  };
 }
 
 function createProtectionSequence(deps){
@@ -16,6 +35,7 @@ function createProtectionSequence(deps){
     sendWalkAwayStatus = () => {},
     log = () => {},
     lock = () => {},
+    evaluateThreat = null,
     timers = {
       setTimeout, clearTimeout, setInterval, clearInterval, now: () => Date.now()
     }
@@ -25,9 +45,18 @@ function createProtectionSequence(deps){
   let walkAwayTimer = null;
   let walkAwayCountdownTimer = null;
   let walkAwayFocusTimer = null;
-  let threatLockTimer = null;
-  let threatFocusTimer = null;
+  let threatTick = null;
+  let threatStart = 0;
+  let threatStage = 'NONE';
+  let threatState = null;
+  let threatPayload = null;
+  let threatPayloadAt = 0;
   let walkAwayDeadline = 0;
+  const evaluate = evaluateThreat || settingsEvaluator(getSettings);
+
+  function clearThreatTick(){
+    if(threatTick){ timers.clearInterval(threatTick); threatTick=null; }
+  }
 
   function clearWalkAwayTimers(){
     if(walkAwayTimer){ timers.clearTimeout(walkAwayTimer); walkAwayTimer=null; }
@@ -38,8 +67,7 @@ function createProtectionSequence(deps){
 
   function cancel(reason='state-change'){
     clearWalkAwayTimers();
-    if(threatFocusTimer){ timers.clearTimeout(threatFocusTimer); threatFocusTimer=null; }
-    if(threatLockTimer){ timers.clearTimeout(threatLockTimer); threatLockTimer=null; }
+    clearThreatTick();
     if(active){
       log(`PROTECTION_SEQUENCE_CANCELLED|type=${active}|reason=${reason}`);
       active=null;
@@ -97,34 +125,44 @@ function createProtectionSequence(deps){
     },delay);
   }
 
-  function startThreat(){
+  function evaluateCurrentThreat(){
+    if(active !== 'THREAT') return;
+    const now = timers.now();
+    const decision = evaluate({
+      state:threatState, payload:threatPayload, threatMs:now - threatStart, ageMs:now - threatPayloadAt
+    });
+    if(ACTIONS.indexOf(decision.action) <= ACTIONS.indexOf(threatStage)) return;
+    threatStage = decision.action;
+    log(`POLICY_DECISION|action=${decision.action}|reason=${decision.reason}`);
+    if(decision.action === 'BLUR'){
+      sendAction('BLUR','threat');
+    }else if(decision.action === 'FOCUS'){
+      sendAction('FOCUS','threat');
+      log('THREAT_FOCUS_ACTIVATED');
+    }else if(decision.action === 'LOCK'){
+      clearThreatTick();
+      sendAction('LOCKING','threat');
+      log('THREAT_LOCK_TRIGGERED');
+      lock('privacy-threat');
+    }
+  }
+
+  function startThreat(state, payload){
     const settings = getSettings();
     if(!isMonitoring() || active === 'THREAT') return;
     if(settings.intruderDetectionEnabled === false) return;
     cancel('new-threat');
     active='THREAT';
-
-    const focusDelay=Math.max(0,numberSetting(settings.intruderFocusDelay,3000));
-    const lockDelay=Math.max(focusDelay,numberSetting(settings.intruderLockDelay,5000));
-
-    sendAction('BLUR','threat');
-    threatFocusTimer=timers.setTimeout(()=>{
-      threatFocusTimer=null;
-      if(active !== 'THREAT') return;
-      sendAction('FOCUS','threat');
-      log('THREAT_FOCUS_ACTIVATED');
-    },focusDelay);
-
-    threatLockTimer=timers.setTimeout(()=>{
-      threatLockTimer=null;
-      if(active !== 'THREAT') return;
-      sendAction('LOCKING','threat');
-      log('THREAT_LOCK_TIMER_EXPIRED');
-      lock('privacy-threat');
-    },lockDelay);
+    threatStart=timers.now();
+    threatStage='NONE';
+    threatState=state;
+    threatPayload=payload;
+    threatPayloadAt=threatStart;
+    evaluateCurrentThreat();
+    if(active === 'THREAT' && threatStage !== 'LOCK') threatTick=timers.setInterval(evaluateCurrentThreat, THREAT_TICK_MS);
   }
 
-  function updateForState(state){
+  function updateForState(state, payload = {}){
     if(state === 'NO_USER'){
       if(active !== 'WALK_AWAY') armWalkAway();
     }else if(state === 'OWNER_PRESENT'){
@@ -134,7 +172,13 @@ function createProtectionSequence(deps){
       cancelWalkAway('owner-present');
     }else if(THREAT_STATES.has(state)){
       if(active === 'WALK_AWAY') cancel('privacy-threat');
-      if(active !== 'THREAT') startThreat();
+      if(active !== 'THREAT') startThreat(state, payload);
+      else{
+        threatState=state;
+        threatPayload=payload;
+        threatPayloadAt=timers.now();
+        evaluateCurrentThreat();
+      }
     }else{
       // CAMERA_ERROR, AI_UNAVAILABLE or an unknown state: monitoring is no longer reliable.
       handleMonitorFailure(`state-${state}`);
@@ -145,10 +189,9 @@ function createProtectionSequence(deps){
   // Fail closed: timers stop, but the current effects stay on (no CLEAR). The
   // Presence Gate FAILSAFE curtain takes over concealment.
   function handleMonitorFailure(reason='ai-failed'){
-    const hadTimers = Boolean(walkAwayTimer || walkAwayCountdownTimer || walkAwayFocusTimer || threatLockTimer || threatFocusTimer);
+    const hadTimers = Boolean(walkAwayTimer || walkAwayCountdownTimer || walkAwayFocusTimer || threatTick);
     clearWalkAwayTimers();
-    if(threatFocusTimer){ timers.clearTimeout(threatFocusTimer); threatFocusTimer=null; }
-    if(threatLockTimer){ timers.clearTimeout(threatLockTimer); threatLockTimer=null; }
+    clearThreatTick();
     if(active || hadTimers){
       log(`PROTECTION_SEQUENCE_HALTED|type=${active || 'NONE'}|reason=${reason}`);
       sendWalkAwayStatus('CANCELLED',0);

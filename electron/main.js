@@ -12,6 +12,9 @@ const { clampLevel } = require('../frontend/intensity');
 const { createScreenLocker, isTestMode } = require('./screen_lock');
 const { createPresenceGate } = require('./presence_gate');
 const { createVirtualDesktops, followCurrentDesktop } = require('./virtual_desktop');
+const { normalizePolicies, resolveProfileName, matchSensitiveApp } = require('./policies');
+const { decide } = require('./policy_engine');
+const { createActiveWindowReader } = require('./active_window');
 
 // Self-test harness only (SMARTSCREEN_TEST=1): isolated profile and a recorded camera source.
 const TEST_MODE = isTestMode();
@@ -27,7 +30,12 @@ if(!gotSingleInstanceLock){
 
 let logDir;
 let logFile;
-let settings = {};
+let settings = {};            // config/settings.json
+let testSettings = {};        // test mode only: SMARTSCREEN_TEST_SETTINGS, applied last
+let policies = normalizePolicies(null);
+let activeProfile = policies.defaultProfile;
+let activeApp = null;         // { id, label, name } of a sensitive foreground app, else null
+let protectionActive = false; // from Enable until a confirmed Disable (stays on in FAILSAFE)
 let win = null;               // primary overlay window (hosts the control panel)
 let winDisplayId = null;      // display the primary overlay currently covers
 const secondaryWindows = new Map(); // BrowserWindow.id -> { window, displayId }
@@ -70,10 +78,87 @@ function loadSettings(){
   }
   if(TEST_MODE && process.env.SMARTSCREEN_TEST_SETTINGS){
     try{
-      settings = { ...settings, ...JSON.parse(process.env.SMARTSCREEN_TEST_SETTINGS) };
+      testSettings = JSON.parse(process.env.SMARTSCREEN_TEST_SETTINGS) || {};
     }catch(err){
       console.error('Invalid SMARTSCREEN_TEST_SETTINGS:', err);
     }
+  }
+}
+
+function policyStateFile(){
+  return path.join(app.getPath('userData'), 'policy_state.json');
+}
+
+function loadPolicies(){
+  try{
+    policies = normalizePolicies(JSON.parse(fs.readFileSync(path.join(__dirname,'..','config','policies.json'),'utf8')));
+  }catch(err){
+    console.error('Failed to load policies:', err);
+    policies = normalizePolicies(null);
+    writeLog(`POLICIES_LOAD_ERROR|${err.message}`);
+  }
+  let saved = null;
+  try{ saved = JSON.parse(fs.readFileSync(policyStateFile(),'utf8')).activeProfile; }catch{}
+  activeProfile = resolveProfileName(policies, saved);
+}
+
+function currentProfile(){
+  return policies.profiles[activeProfile];
+}
+
+// settings.json ← active profile ← test overrides.
+function effectiveSettings(){
+  const profile = currentProfile();
+  return {
+    ...settings,
+    walkAwayLockDelay:profile.walkAwayLockDelay,
+    ...testSettings,
+    presenceGate:{
+      ...(settings.presenceGate || {}),
+      curtainEffect:profile.curtainEffect,
+      ...(testSettings.presenceGate || {})
+    }
+  };
+}
+
+function setActiveProfile(name, source){
+  const next = resolveProfileName(policies, name);
+  if(next !== name) return false;
+  activeProfile = next;
+  try{ fs.writeFileSync(policyStateFile(), JSON.stringify({ activeProfile:next })); }catch(err){ writeLog(`POLICY_STATE_SAVE_ERROR|${err.message}`); }
+  writeLog(`PROFILE_CHANGED|profile=${next}|source=${source}`);
+  presenceGate.refresh();
+  if(win && !win.isDestroyed()) win.webContents.send('profile-changed', profileInfo());
+  rebuildTrayMenu();
+  return true;
+}
+
+function profileInfo(){
+  return { active:activeProfile, names:Object.keys(policies.profiles) };
+}
+
+// Foreground app, polled only while protection is on. Titles are matched, never logged.
+const activeWindowReader = createActiveWindowReader();
+let activeAppTimer = null;
+function pollActiveApp(){
+  const fg = activeWindowReader.read();
+  if(!fg || fg.pid === process.pid) return; // keep the last app while our own panel is focused
+  const match = matchSensitiveApp(fg, policies.sensitiveApps);
+  const key = match ? `${match.id}:${match.name}` : '';
+  const prev = activeApp ? `${activeApp.id}:${activeApp.name}` : '';
+  if(key === prev) return;
+  activeApp = match;
+  writeLog(match ? `SENSITIVE_APP_ACTIVE|category=${match.label}|app=${match.name}` : 'SENSITIVE_APP_INACTIVE');
+}
+
+function setActiveAppPolling(on){
+  if(on && !activeAppTimer && activeWindowReader.available){
+    pollActiveApp();
+    activeAppTimer = setInterval(pollActiveApp, 1000);
+  }else if(!on && activeAppTimer){
+    clearInterval(activeAppTimer);
+    activeAppTimer = null;
+    activeApp = null;
   }
 }
 
@@ -160,7 +245,7 @@ function createWindow(){
   winDisplayId = primary.id;
 
   win.webContents.on('did-finish-load',()=>{
-    win.webContents.send('settings-loaded',settings);
+    win.webContents.send('settings-loaded',effectiveSettings());
   });
 
   win.on('closed',()=>{ win=null; winDisplayId=null; });
@@ -269,19 +354,27 @@ ipcMain.handle('get-capture-source',async(event)=>{
   }
 });
 
-function createTray(){
-  if(tray) return;
-  tray = new Tray(path.join(assetPath,'icon-gray.png'));
-  const menu = Menu.buildFromTemplate([
+function rebuildTrayMenu(){
+  if(!tray) return;
+  tray.setContextMenu(Menu.buildFromTemplate([
     { label:'Show Overlay', click:()=>allOverlayWindows().forEach((w)=>w.show()) },
     { label:'Hide Overlay', click:hideOverlays },
+    { type:'separator' },
+    { label:'Privacy profile', submenu:profileInfo().names.map((name)=>({
+      label:name, type:'radio', checked:name === activeProfile, click:()=>setActiveProfile(name, 'tray')
+    })) },
     { type:'separator' },
     { label:'Protection status: Local device', enabled:false },
     { type:'separator' },
     { label:'Exit', click:()=>app.quit() }
-  ]);
+  ]));
+}
+
+function createTray(){
+  if(tray) return;
+  tray = new Tray(path.join(assetPath,'icon-gray.png'));
   tray.setToolTip('SmartScreen Privacy Suite');
-  tray.setContextMenu(menu);
+  rebuildTrayMenu();
 }
 
 function hideOverlays(){
@@ -594,7 +687,10 @@ const lockScreen = createScreenLocker({
 });
 
 const protection = createProtectionSequence({
-  getSettings:()=>settings,
+  getSettings:effectiveSettings,
+  evaluateThreat:({ state, payload, threatMs, ageMs })=>decide({
+    state, tracks:payload?.tracks, app:activeApp, profile:currentProfile(), profileName:activeProfile, threatMs, ageMs
+  }),
   isMonitoring:()=>Boolean(pythonProcess),
   sendAction:sendPrivacyAction,
   sendWalkAwayStatus,
@@ -605,7 +701,7 @@ const protection = createProtectionSequence({
 // Presence Gate: owns the privacy curtain. The curtain is sent to every overlay window
 // directly (not relayed by the primary renderer), so each display conceals on its own.
 const presenceGate = createPresenceGate({
-  getSettings:()=>settings,
+  getSettings:effectiveSettings,
   log:writeLog,
   lock:lockScreen,
   onChange:(snapshot)=>{
@@ -620,7 +716,7 @@ const presenceGate = createPresenceGate({
 function sendAIState(payload){
   if(!win || win.isDestroyed()) return;
   win.webContents.send('ai-state', payload);
-  protection.updateForState(payload.state);
+  protection.updateForState(payload.state, payload);
   presenceGate.update(payload.state, payload);
 
   switch(payload.state){
@@ -663,7 +759,7 @@ function stopAIProcess(){
 
 function startAIWatchdog(){
   if(aiWatchdog) clearInterval(aiWatchdog);
-  const timeoutMs = Math.max(5000, Number(settings.aiWatchdogTimeoutMs ?? 15000) || 15000);
+  const timeoutMs = Math.max(5000, Number(effectiveSettings().aiWatchdogTimeoutMs ?? 15000) || 15000);
   lastAIHeartbeat = Date.now();
   aiWatchdog = setInterval(() => {
     if(!pythonProcess || !win || win.isDestroyed()) return;
@@ -682,6 +778,8 @@ ipcMain.on('set-ignore-mouse',(_event,val)=>{
 
 ipcMain.on('start-ai',()=>{
   if(!win || pythonProcess) return;
+  protectionActive = true;
+  setActiveAppPolling(true);
   // The curtain goes up before the camera starts.
   if(presenceGate.state === 'FAILSAFE') presenceGate.retry();
   else presenceGate.start();
@@ -759,16 +857,18 @@ function startAI(){
   pythonProcess=child;
   win.webContents.send('ai-starting');
 
+  const cfg = effectiveSettings();
   const config = {
     template: template.embedding,
-    threshold: Number(settings.recognitionThreshold ?? 0.363),
-    detectionThreshold: Number(settings.faceDetectionThreshold ?? 0.85),
-    processEveryN: Math.max(1, Number(settings.aiProcessEveryN ?? 3)),
-    confirmFrames: Math.max(1, Number(settings.aiConfirmFrames ?? 5)),
-    minFaceSize: Math.max(40, Number(settings.minimumFaceSize ?? 70)),
-    noUserDetectionDelay: Math.max(0.5, Number(settings.noUserDetectionDelay ?? 1.5)),
-    cameraFailureTimeout: Math.max(0.5, Number(settings.cameraFailureTimeout ?? 3)),
-    stateUpdateInterval: Math.max(0, Number(settings.aiStateUpdateInterval ?? 0.4)),
+    threshold: Number(cfg.recognitionThreshold ?? 0.363),
+    detectionThreshold: Number(cfg.faceDetectionThreshold ?? 0.85),
+    processEveryN: Math.max(1, Number(cfg.aiProcessEveryN ?? 3)),
+    confirmFrames: Math.max(1, Number(cfg.aiConfirmFrames ?? 5)),
+    minFaceSize: Math.max(40, Number(cfg.minimumFaceSize ?? 70)),
+    noUserDetectionDelay: Math.max(0.5, Number(cfg.noUserDetectionDelay ?? 1.5)),
+    cameraFailureTimeout: Math.max(0.5, Number(cfg.cameraFailureTimeout ?? 3)),
+    stateUpdateInterval: Math.max(0, Number(cfg.aiStateUpdateInterval ?? 0.4)),
+    headPose: cfg.headPose || {},
     logDir: logPath
   };
   // The backend ignores cameraSource unless SMARTSCREEN_TEST=1 is set too.
@@ -849,12 +949,16 @@ function startAI(){
 // besides quitting, to remove the curtain.
 ipcMain.on('stop-ai',()=>{
   stopAIProcess();
+  protectionActive = false;
+  setActiveAppPolling(false);
   protection.stop('ai-stopped');
   presenceGate.stop('protection-disabled');
   setTimeout(()=>win?.webContents.send('ai-stopped'),150);
 });
 
 ipcMain.handle('get-presence-gate',()=>presenceGate.snapshot());
+ipcMain.handle('get-profiles',()=>profileInfo());
+ipcMain.handle('set-profile',(_event,name)=>({ ok:typeof name === 'string' && setActiveProfile(name, 'panel'), ...profileInfo() }));
 ipcMain.handle('set-presence-gate',(_event,enabled)=>{
   const ok = presenceGate.setEnabled(enabled === true);
   if(ok) writeLog(`PRESENCE_GATE_SETTING|enabled=${enabled === true}`);
@@ -914,6 +1018,8 @@ app.whenReady().then(()=>{
   configureCameraPermissions();
   loadSettings();
   if(TEST_MODE) writeLog('TEST_MODE_ACTIVE');
+  loadPolicies();
+  writeLog(`PROFILE_ACTIVE|profile=${activeProfile}`);
   runRuntimeHealthCheck();
 
   for(const eventName of ['display-added','display-removed','display-metrics-changed']){

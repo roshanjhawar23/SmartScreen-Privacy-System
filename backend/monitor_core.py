@@ -11,6 +11,8 @@ import sys
 import threading
 from dataclasses import dataclass, field
 
+from face_tracker import primary_track
+
 THREAT_STATES = ("UNKNOWN_PERSON", "UNKNOWN_GROUP", "OWNER_AND_UNKNOWN")
 
 
@@ -41,10 +43,21 @@ class FrameObservation:
     unknown: int = 0
     best_owner_score: float = -1.0
     best_unknown_score: float = -1.0
+    detections: list = field(default_factory=list)  # face_tracker.Detection per face
+    tracks: list = field(default_factory=list)      # face_tracker.TrackView per face
 
     @property
     def faces(self) -> int:
         return self.owners + self.unknown
+
+
+def pose_fields(tracks) -> str:
+    """STATE suffix: pose of the most attentive unknown (else owner) plus every track."""
+    primary = primary_track(tracks)
+    if primary is None:
+        return ""
+    encoded = ",".join(t.encode() for t in tracks)
+    return f"|facing={primary.facing}|yaw={primary.yaw:.1f}|pitch={primary.pitch:.1f}|tracks={encoded}"
 
 
 @dataclass
@@ -120,7 +133,7 @@ class StateTracker:
         message = (
             f"STATE|{candidate}|faces={obs.faces}|owners={obs.owners}|unknown={obs.unknown}"
             f"|best={best:.4f}|ownerScore={max(obs.best_owner_score, 0.0):.4f}"
-        )
+        ) + pose_fields(obs.tracks)
 
         if candidate == self.last_state:
             if self.update_interval <= 0 or now - self.last_emit_time < self.update_interval:

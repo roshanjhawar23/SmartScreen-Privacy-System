@@ -10,6 +10,8 @@ import cv2
 import numpy as np
 
 from camera_source import WEBCAM, FileCameraSource, resolve_camera_source
+from face_tracker import OWNER, UNKNOWN, Detection, FaceTracker
+from head_pose import AWAY, PoseConfig, estimate_pose
 from monitor_core import (
     CameraHealth,
     Emitter,
@@ -74,6 +76,7 @@ def parse_config(raw: dict) -> dict:
     config["noUserDetectionDelay"] = max(0.5, float(config.get("noUserDetectionDelay", 1.5)))
     config["stateUpdateInterval"] = max(0.0, float(config.get("stateUpdateInterval", 0.4)))
     config["cameraFailureTimeout"] = max(0.5, float(config.get("cameraFailureTimeout", CAMERA_FAILURE_TIMEOUT)))
+    config["headPose"] = PoseConfig.from_dict(config.get("headPose") if isinstance(config.get("headPose"), dict) else None)
     config["logDir"] = str(config.get("logDir") or default_log_dir())
     # Test-only: ignored (always "webcam") unless SMARTSCREEN_TEST=1.
     config["cameraSource"] = resolve_camera_source(config.get("cameraSource"))
@@ -145,9 +148,17 @@ def observe_frame(frame, detector, recognizer, owner_template, config) -> FrameO
         if similarity >= config["threshold"]:
             obs.owners += 1
             obs.best_owner_score = max(obs.best_owner_score, similarity)
+            role = OWNER
         else:
             obs.unknown += 1
             obs.best_unknown_score = max(obs.best_unknown_score, similarity)
+            role = UNKNOWN
+
+        pose = estimate_pose(face[4:14], config["headPose"])
+        obs.detections.append(Detection(
+            (float(face[0]), float(face[1]), w, h), role,
+            pose.facing if pose else AWAY, pose.yaw if pose else 0.0, pose.pitch if pose else 0.0,
+        ))
     return obs
 
 
@@ -163,6 +174,7 @@ def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None
     )
     camera_health = CameraHealth(failure_timeout=float(config["cameraFailureTimeout"]))
     image_health = ImageHealth(failure_timeout=float(config["cameraFailureTimeout"]))
+    face_tracker = FaceTracker()
     frame_counter = 0
 
     while not stop_event.is_set():
@@ -195,6 +207,7 @@ def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None
             continue
 
         obs = observe_frame(frame, detector, recognizer, owner_template, config)
+        obs.tracks = face_tracker.update(now, obs.detections)
         event = tracker.update(now, obs)
         if event is None:
             continue

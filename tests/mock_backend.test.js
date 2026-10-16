@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { formatState, parseScenario, runScenario } = require('./e2e/mock_backend');
+const { formatState, formatTracks, parseScenario, runScenario } = require('./e2e/mock_backend');
 const { parseStateMessage } = require('../electron/ai_protocol');
 const { createFakeTimers } = require('./helpers/fake_timers');
 
@@ -96,4 +96,16 @@ test('every committed e2e scenario file is valid', () => {
   for(const file of files){
     assert.doesNotThrow(() => parseScenario(fs.readFileSync(path.join(dir, file), 'utf8')), file);
   }
+});
+
+test('scripted tracks grow their exposure like the real tracker', () => {
+  const t = run({ heartbeatMs:10000, stateUpdateMs:400, steps:[
+    { at:0, state:'UNKNOWN_PERSON', tracks:[{ id:2, role:'unknown', facing:'AWAY', yaw:60 }] }
+  ] });
+  t.timers.advance(800);
+  const parsed = t.lines.map((l) => parseStateMessage(l));
+  assert.deepEqual(parsed.map((p) => p.tracks[0].presentMs), [0, 400, 800]);
+  assert.deepEqual(parsed.map((p) => p.tracks[0].lookingMs), [0, 0, 0]);
+  assert.equal(parsed[0].facing, 'AWAY');
+  assert.equal(formatTracks([{ id:3, facing:'GLANCING' }], 1000), '|facing=GLANCING|yaw=0.0|pitch=0.0|tracks=3:U:GLANCING:0.0:0.0:1000:0:1000');
 });

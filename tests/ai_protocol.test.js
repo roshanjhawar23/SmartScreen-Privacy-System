@@ -33,3 +33,18 @@ test('parses AI_ERROR messages', () => {
   assert.deepEqual(parseErrorMessage('AI_ERROR|CAMERA_ERROR|No camera|x'), { kind: 'CAMERA_ERROR', message: 'No camera|x' });
   assert.equal(parseErrorMessage('AI_ERROR').kind, 'AI_UNAVAILABLE');
 });
+
+test('STATE with pose and tracks', () => {
+  const { parseStateMessage } = require('../electron/ai_protocol');
+  const msg = 'STATE|OWNER_AND_UNKNOWN|faces=2|owners=1|unknown=1|best=0.6|ownerScore=0.6'
+    + '|facing=GLANCING|yaw=-31.2|pitch=4.0|tracks=1:O:FACING_SCREEN:2.0:-3.0:4000:4000:4000,2:U:GLANCING:-31.2:4.0:1500:0:1200,bad:X';
+  const data = parseStateMessage(msg);
+  assert.equal(data.facing, 'GLANCING');
+  assert.equal(data.yaw, -31.2);
+  assert.deepEqual(data.tracks, [
+    { id:1, role:'owner', facing:'FACING_SCREEN', yaw:2, pitch:-3, presentMs:4000, facingMs:4000, lookingMs:4000 },
+    { id:2, role:'unknown', facing:'GLANCING', yaw:-31.2, pitch:4, presentMs:1500, facingMs:0, lookingMs:1200 }
+  ]);
+  assert.equal(parseStateMessage('STATE|NO_USER|faces=0').tracks, undefined);
+  assert.equal(parseStateMessage('STATE|OWNER_PRESENT|facing=SIDEWAYS').facing, undefined);
+});

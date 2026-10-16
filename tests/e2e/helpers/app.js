@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 
 const REPO_DIR = path.resolve(__dirname, '..', '..', '..');
+const NEUTRAL_APP = { process:'C:\\Windows\\System32\\notepad.exe', title:'notes.txt - Notepad' };
 const PRIVATE_DIR = path.join(REPO_DIR, 'tests', 'fixtures', 'private');
 const SCENARIO_DIR = path.join(PRIVATE_DIR, 'scenarios');
 const ARTIFACT_DIR = path.join(REPO_DIR, 'tests', 'e2e', 'artifacts');
@@ -38,7 +39,9 @@ function loadOwnerEmbedding(useOwner){
 // mock: name of a tests/e2e/scenarios/*.json script replacing the Python backend.
 // scenario/cameraSource: recorded camera input for the real Python backend.
 // userData: reuse a folder from an earlier launch (restart tests); seedLog: activity.log lines.
-async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, settings, userData:reuse, seedLog } = {}){
+// activeApp: simulated foreground app { process, title } (default: a neutral app, so the real
+// foreground window never influences a test); change it mid-run with setActiveApp().
+async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, settings, userData:reuse, seedLog, activeApp = NEUTRAL_APP } = {}){
   const userData = reuse || fs.mkdtempSync(path.join(os.tmpdir(), 'smartscreen-e2e-'));
   if(seedLog){
     fs.mkdirSync(path.join(userData, 'logs'), { recursive:true });
@@ -52,10 +55,13 @@ async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, 
     biometric:{ enrolled:true, version:1, templateType:'sface-cosine', sampleCount:5 }
   }));
 
+  const activeAppFile = path.join(userData, 'test_active_app.json');
+  fs.writeFileSync(activeAppFile, JSON.stringify(activeApp));
   const env = {
     ...process.env,
     SMARTSCREEN_TEST:'1',
     SMARTSCREEN_USER_DATA:userData,
+    SMARTSCREEN_TEST_ACTIVE_APP:activeAppFile,
   };
   if(mock) env.SMARTSCREEN_MOCK_BACKEND = mockScenarioPath(mock);
   else env.SMARTSCREEN_CAMERA_SOURCE = cameraSource || scenarioPath(scenario);
@@ -71,7 +77,11 @@ async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, 
   fs.mkdirSync(path.join(userData, 'biometric'), { recursive:true });
   fs.writeFileSync(path.join(userData, 'biometric', 'owner_face.enc'), encrypted);
 
-  return { app, page, userData, logFile:path.join(userData, 'logs', 'activity.log') };
+  return { app, page, userData, activeAppFile, logFile:path.join(userData, 'logs', 'activity.log') };
+}
+
+function setActiveApp(ctx, app){
+  fs.writeFileSync(ctx.activeAppFile, JSON.stringify(app));
 }
 
 async function closeApp(ctx, { keepUserData = false } = {}){
@@ -167,5 +177,5 @@ async function snap(page, testInfo, name){
 module.exports = {
   REPO_DIR, PRIVATE_DIR, scenarioPath, mockScenarioPath, missingFixtures, launchApp, closeApp,
   readEvents, waitForEvent, indexOfEvent, enableProtection, layerOpacity, anyProtectiveLayerOn, expectEventOrder, snap,
-  curtainOn, autoConfirmDialogs, emitPowerEvent, msBetween
+  curtainOn, autoConfirmDialogs, emitPowerEvent, msBetween, setActiveApp
 };

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "defaultProfile": "Office",
+  "profiles": {
+    "Home": {
+      "glancingCounts": false,
+      "curtainEffect": "blur",
+      "walkAwayLockDelay": 15000,
+      "escalation": { "blurMs": 1500, "focusMs": 5000, "lockMs": 15000 },
+      "sensitiveEscalation": { "blurMs": 0, "focusMs": 2000, "lockMs": 8000 },
+      "notLooking": { "blurMs": 5000, "lockMs": null }
+    },
+    "Office": {
+      "glancingCounts": true,
+      "curtainEffect": "blackout",
+      "walkAwayLockDelay": 6000,
+      "escalation": { "blurMs": 0, "focusMs": 3000, "lockMs": 5000 },
+      "sensitiveEscalation": { "blurMs": 0, "focusMs": 1000, "lockMs": 3000 },
+      "notLooking": { "blurMs": 2000, "lockMs": 20000 }
+    },
+    "Public": {
+      "glancingCounts": true,
+      "curtainEffect": "blackout",
+      "walkAwayLockDelay": 4000,
+      "escalation": { "blurMs": 0, "focusMs": 1500, "lockMs": 3000 },
+      "sensitiveEscalation": { "blurMs": 0, "focusMs": 0, "lockMs": 2000 },
+      "notLooking": { "blurMs": 0, "lockMs": 8000 }
+    }
+  },
+  "sensitiveApps": [
+    {
+      "id": "password-manager",
+      "label": "Password manager",
+      "processes": ["keepass*.exe", "1password.exe", "bitwarden.exe", "dashlane*.exe", "lastpass*.exe", "nordpass.exe"],
+      "titleKeywords": ["password manager", "bitwarden", "1password", "keepass", "lastpass"]
+    },
+    {
+      "id": "banking",
+      "label": "Banking",
+      "processes": [],
+      "titleKeywords": ["bank", "netbanking", "net banking", "paypal", "credit card", "upi"]
+    },
+    {
+      "id": "email",
+      "label": "Email",
+      "processes": ["outlook.exe", "olk.exe", "hxoutlook.exe", "thunderbird.exe"],
+      "titleKeywords": ["gmail", "inbox", "outlook"]
+    },
+    {
+      "id": "messaging",
+      "label": "Messaging",
+      "processes": ["ms-teams.exe", "teams.exe", "slack.exe", "whatsapp.exe", "telegram.exe", "signal.exe"],
+      "titleKeywords": ["whatsapp", "messenger"]
+    }
+  ]
+}

@@ -1,5 +1,4 @@
 {
-  "walkAwayLockDelay": 6000,
   "intruderFocusDelay": 3000,
   "intruderLockDelay": 5000,
   "noUserLockEnabled": true,
@@ -17,7 +16,13 @@
     "revealConfirmMs": 1200,
     "revealConfirmUpdates": 3,
     "absenceGraceMs": 1500,
-    "failsafeLockMs": 0,
-    "curtainEffect": "blackout"
+    "failsafeLockMs": 0
+  },
+  "headPose": {
+    "pitchOffset": 0,
+    "facingYaw": 20,
+    "facingPitch": 20,
+    "glancingYaw": 45,
+    "glancingPitch": 35
   }
 }
