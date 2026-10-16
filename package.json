@@ -61,5 +61,7 @@
   },
   "dependencies": {
     "koffi": "^3.3.3"
-  }
+  },
+  "license": "MIT",
+  "author": "Roshan Jhawar"
 }
