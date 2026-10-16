@@ -1516,11 +1516,22 @@ app.whenReady().then(()=>{
 
   virtualDesktops = createVirtualDesktops();
   writeLog(`VIRTUAL_DESKTOP_FOLLOW|available=${virtualDesktops.available}`);
-  if(virtualDesktops.available) setInterval(followVirtualDesktops, 1000);
+  // 250 ms: the on-current-desktop check is a cheap COM call; a switch leaves the other
+  // desktop uncovered for at most ~0.4 s (poll + probe) instead of ~1 s.
+  if(virtualDesktops.available) setInterval(followVirtualDesktops, 250);
 
   // Never unlocks Windows: after a lock, unlock or resume the gate conceals and re-verifies.
-  powerMonitor.on('lock-screen',()=>{ writeLog('SESSION_LOCKED'); presenceGate.sessionLocked(); });
-  powerMonitor.on('unlock-screen',()=>{ writeLog('SESSION_UNLOCKED'); presenceGate.sessionUnlocked(); });
+  // Electron 44 emits each session event twice within a few ms: handle one per second.
+  let lastSessionEvent = { name:'', at:-Infinity };
+  const sessionEvent = (name, handler) => () => {
+    const now = performance.now();
+    if(lastSessionEvent.name === name && now - lastSessionEvent.at < 1000) return;
+    lastSessionEvent = { name, at:now };
+    writeLog(name);
+    handler();
+  };
+  powerMonitor.on('lock-screen', sessionEvent('SESSION_LOCKED', ()=>presenceGate.sessionLocked()));
+  powerMonitor.on('unlock-screen', sessionEvent('SESSION_UNLOCKED', ()=>presenceGate.sessionUnlocked()));
   powerMonitor.on('resume',()=>{ clockMonitor.reset(); presenceGate.resumed(); });
   powerMonitor.on('suspend',()=>clockMonitor.reset());
 

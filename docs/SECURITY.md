@@ -38,8 +38,9 @@ security boundary: SmartScreen may lock the session but never unlocks it or bypa
     keyboard, which the walk-away and threat locks address;
   - secure desktop (UAC, Ctrl+Alt+Del, lock screen) is drawn by Windows and shows no app content;
   - virtual desktops: Electron cannot show a window on all desktops on Windows. SmartScreen moves its
-    overlays to the current desktop within ~1 s of a switch (`IVirtualDesktopManager`), so after a
-    switch the other desktop can be visible for up to about a second.
+    overlays to the current desktop shortly after a switch (`IVirtualDesktopManager`, checked every
+    250 ms, plus a ~150 ms probe), so the other desktop can be visible for up to about 0.4 s
+    (measured: up to 0.94 s with the earlier 1 s check).
   Windows lock is the security boundary.
 - Anyone at the keyboard can disable protection (with a confirmation) or quit the app; SmartScreen
   does not authenticate that person. It never unlocks Windows.

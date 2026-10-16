@@ -145,6 +145,7 @@ test('rule 7: session lock and unlock re-conceal; reveal again needs verificatio
   const { page, app, logFile } = await start('owner_present');
   await h.waitForEvent(logFile, 'PRESENCE_GATE|REVEALED');
   await h.emitPowerEvent(app, 'lock-screen');
+  await h.emitPowerEvent(app, 'lock-screen'); // Electron 44 emits it twice: logged once
   await h.waitForEvent(logFile, 'PRESENCE_GATE|CONCEALED|reason=session-locked');
   expect(await h.curtainOn(page)).toBe(true);
   await h.emitPowerEvent(app, 'unlock-screen');
@@ -159,6 +160,7 @@ test('rule 7: session lock and unlock re-conceal; reveal again needs verificatio
   expect(revealedAgain).toBeGreaterThan(verifyingAgain);
   // SmartScreen only observes the unlock (SESSION_UNLOCKED); it never performs one.
   expect(events()).toEqual(expect.arrayContaining(['SESSION_LOCKED', 'SESSION_UNLOCKED']));
+  expect(events().filter((e) => e === 'SESSION_LOCKED')).toHaveLength(1);
   const observations = /^(PRESENCE_GATE\||SESSION_(UN)?LOCKED$)/;
   expect(events().some((e) => /unlock|LOGON|AUTH/i.test(e) && !observations.test(e))).toBe(false);
   await h.snap(page, testInfo, 're-revealed');
