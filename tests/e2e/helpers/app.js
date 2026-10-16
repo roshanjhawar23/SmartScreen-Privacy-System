@@ -37,8 +37,13 @@ function loadOwnerEmbedding(useOwner){
 
 // mock: name of a tests/e2e/scenarios/*.json script replacing the Python backend.
 // scenario/cameraSource: recorded camera input for the real Python backend.
-async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, settings } = {}){
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'smartscreen-e2e-'));
+// userData: reuse a folder from an earlier launch (restart tests); seedLog: activity.log lines.
+async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, settings, userData:reuse, seedLog } = {}){
+  const userData = reuse || fs.mkdtempSync(path.join(os.tmpdir(), 'smartscreen-e2e-'));
+  if(seedLog){
+    fs.mkdirSync(path.join(userData, 'logs'), { recursive:true });
+    fs.writeFileSync(path.join(userData, 'logs', 'activity.log'), seedLog.map((l) => `${l}\n`).join(''));
+  }
   fs.writeFileSync(path.join(userData, 'device_profile.json'), JSON.stringify({
     version:1,
     setupComplete:true,
@@ -69,10 +74,12 @@ async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, 
   return { app, page, userData, logFile:path.join(userData, 'logs', 'activity.log') };
 }
 
-async function closeApp(ctx){
+async function closeApp(ctx, { keepUserData = false } = {}){
   if(!ctx) return;
   try{ await ctx.app.close(); }catch{}
-  try{ fs.rmSync(ctx.userData, { recursive:true, force:true }); }catch{}
+  if(!keepUserData){
+    try{ fs.rmSync(ctx.userData, { recursive:true, force:true }); }catch{}
+  }
 }
 
 // Log events (without timestamps), oldest first.
