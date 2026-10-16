@@ -10,5 +10,14 @@
   "aiConfirmFrames": 5,
   "minimumFaceSize": 70,
   "noUserDetectionDelay": 1.5,
-  "walkAwayFocusDelay": 3000
+  "walkAwayFocusDelay": 3000,
+  "aiStateUpdateInterval": 0.4,
+  "presenceGate": {
+    "enabled": true,
+    "revealConfirmMs": 1200,
+    "revealConfirmUpdates": 3,
+    "absenceGraceMs": 1500,
+    "failsafeLockMs": 0,
+    "curtainEffect": "blackout"
+  }
 }

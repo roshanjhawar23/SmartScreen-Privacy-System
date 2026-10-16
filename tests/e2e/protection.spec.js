@@ -89,23 +89,28 @@ for(const [mock, label] of [
   });
 }
 
-test('threat recovery: unknown leaves, owner verified again', async ({}, testInfo) => {
+test('threat recovery: unknown leaves, owner verified again, threat lock cancelled', async ({}, testInfo) => {
   const { page, logFile } = await start('threat_recovery');
   await expect(identity()).toHaveText('Unrecognized person');
   await expect(identity()).toHaveText('Owner verified');
+  await h.waitForEvent(logFile, 'PROTECTION_SEQUENCE_CANCELLED|type=THREAT|reason=owner-returned');
   await page.waitForTimeout(6000); // past the threat lock deadline
   await h.snap(page, testInfo, 'after-recovery');
-  // Whether a threat that already ended should still lock is an open product
-  // decision (Phase 0 behaviour: the threat lock timer is not cancelled). Recorded, not asserted.
-  testInfo.annotations.push({ type:'observed', description:h.readEvents(logFile).filter((e) => /THREAT|LOCK|CANCELLED/.test(e)).join(' ; ') });
+  // Owner decision 2026-10-16: a threat that has ended does not lock.
+  noLock();
+  h.expectEventOrder(h.readEvents(logFile), [
+    'AI_STATE|STATE|UNKNOWN_PERSON', 'PRESENCE_GATE|CONCEALED|reason=threat-unknown_person',
+    'PROTECTION_SEQUENCE_CANCELLED|type=THREAT|reason=owner-returned', 'PRESENCE_GATE|REVEALED|reason=owner-verified'
+  ]);
 });
 
-test('camera failure: Camera unavailable, protection stops', async ({}, testInfo) => {
+test('camera failure: Camera unavailable, protection stays on with Retry', async ({}, testInfo) => {
   const { page, logFile } = await start('camera_error');
   await expect(identity()).toHaveText('Owner verified');
   await expect(status()).toHaveText('Camera unavailable');
   await expect(identity()).toHaveText('Camera unavailable');
-  await expect(page.locator('#aiBtn')).toHaveText('Enable Protection');
+  await expect(page.locator('#aiBtn')).toHaveText('Disable Protection');
+  await expect(page.locator('#retryBtn')).toBeVisible();
   await h.waitForEvent(logFile, 'AI_EXIT|code=1');
   await page.waitForTimeout(500);
   await expect(status()).toHaveText('Camera unavailable'); // not overwritten by the exit
@@ -131,10 +136,8 @@ test('backend crash without an error line: Protection unavailable', async ({}, t
   await h.snap(page, testInfo, 'crash');
 });
 
-// Fail-closed rule (CLAUDE.md #2). KNOWN DEFECT until Phase 1.5 (Presence Gate):
-// a monitoring failure leaves or makes the screen revealed. test.fail() marks the
-// expected failure; it turns red ("unexpectedly passed") once fixed — then remove it.
-const FAIL_OPEN = 'Known Phase 0 defect: monitoring failure reveals the screen (Phase 1.5 fixes it).';
+// Fail-closed rule (CLAUDE.md #2): fixed in Phase 1.5 by the Presence Gate FAILSAFE.
+// (Until then these were expected failures.)
 for(const [mock, settings, event] of [
   ['camera_error', undefined, 'AI_ERROR|CAMERA_ERROR|'],
   ['camera_error_while_away', undefined, 'AI_ERROR|CAMERA_ERROR|'],
@@ -142,7 +145,6 @@ for(const [mock, settings, event] of [
   ['ai_crash', undefined, 'AI_EXIT|code=1']
 ]){
   test(`FAIL-CLOSED (${mock}): the screen stays concealed after a monitoring failure`, async ({}, testInfo) => {
-    test.fail(true, FAIL_OPEN);
     const { page, logFile } = await start(mock, { settings });
     await h.waitForEvent(logFile, event, 15000);
     await page.waitForTimeout(1000);

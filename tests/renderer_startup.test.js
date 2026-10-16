@@ -151,7 +151,30 @@ test('secondary overlay only mirrors render state', () => {
   const o = loadOverlay('secondary');
   assert.equal(o.counters.setInterval, 0);
   assert.ok(o.document.body.classList.contains('secondary-overlay'));
-  assert.deepEqual(Object.keys(o.ipcListeners), ['onRenderState']);
+  // Render state is mirrored from the primary; the Presence Gate curtain comes from main directly.
+  assert.deepEqual(Object.keys(o.ipcListeners), ['onRenderState', 'onPresenceCurtain']);
   o.ipcListeners.onRenderState[0]({ blackout: true, level: 100 });
   assert.equal(o.elements.get('blackoutLayer').style.opacity, '1');
+});
+
+test('secondary overlay conceals on the curtain alone, at full strength', () => {
+  const o = loadOverlay('secondary');
+  o.ipcListeners.onPresenceCurtain[0]({ on: true, effect: 'blackout' });
+  assert.equal(o.elements.get('blackoutLayer').style.opacity, '1');
+  assert.equal(o.elements.get('blackoutLayer').style.background, 'rgba(0,0,0,1)');
+  // A render state from the primary (all effects off) must not remove the curtain.
+  o.ipcListeners.onRenderState[0]({ blackout: false, blur: false, level: 0 });
+  assert.equal(o.elements.get('blackoutLayer').style.opacity, '1');
+  o.ipcListeners.onPresenceCurtain[0]({ on: false, effect: 'blackout' });
+  assert.equal(o.elements.get('blackoutLayer').style.opacity, '0');
+});
+
+test('primary overlay: AI failure keeps protection on and keeps automatic effects', () => {
+  const o = loadOverlay('primary');
+  o.ipcListeners.onPrivacyAction[0]({ action: 'BLUR', reason: 'threat' });
+  assert.equal(o.elements.get('overlay').style.opacity, '1');
+  o.ipcListeners.onAIFailed[0](null, { kind: 'AI_UNAVAILABLE', message: 'x' });
+  assert.equal(o.elements.get('overlay').style.opacity, '1');
+  assert.equal(o.elements.get('ai-status').textContent, 'Protection unavailable');
+  assert.ok(!o.sent.some(([name]) => name === 'notifyAIDisabled'));
 });

@@ -18,7 +18,30 @@ function field(raw, index, prefix){
   return prefix && value.startsWith(prefix) ? value.slice(prefix.length) : value;
 }
 
+const GATE_CONCEALED_TITLES = [
+  [/^threat-/, 'Screen concealed — unrecognized person'],
+  [/^(owner-absent|no-user)$/, 'Screen concealed — owner absent'],
+  [/^session-locked$/, 'Screen concealed — session locked'],
+  [/^(session-unlocked|system-resumed)$/, 'Screen concealed — verifying owner'],
+  [/^retry$/, 'Retrying owner verification'],
+  [/./, 'Screen concealed — verifying owner']
+];
+
+function describeGateEvent(raw){
+  const [, event, reasonField = ''] = raw.split('|');
+  const reason = reasonField.replace(/^reason=/, '');
+  switch(event){
+    case 'REVEALED': return { type:'PRESENCE', title:'Screen revealed for owner' };
+    case 'CONCEALED': return { type:'PRESENCE', title:GATE_CONCEALED_TITLES.find(([re]) => re.test(reason))[1] };
+    case 'FAILSAFE': return { type:'ERROR', title:'Screen protected — verification unavailable', detail:reason };
+    case 'FAILSAFE_LOCK': return { type:'ACTION', title:'Screen locked — verification unavailable' };
+    case 'DISABLED': return reason === 'protection-disabled' ? { type:'SYSTEM', title:'Protection disabled' } : null;
+    default: return null; // VERIFYING, ABSENCE_GRACE: too noisy for the history
+  }
+}
+
 function describeEvent(raw){
+  if(raw.startsWith('PRESENCE_GATE|')) return describeGateEvent(raw);
   if(raw === 'DEVICE_SETUP_COMPLETE') return { type:'SETUP', title:'Device setup completed' };
   if(raw.startsWith('BIOMETRIC_ENROLLED|')) return { type:'IDENTITY', title:'Owner identity enrolled', detail:field(raw,1,'samples=') };
   if(raw.startsWith('AI_STATE|STATE|OWNER_PRESENT')) return { type:'IDENTITY', title:'Owner verified' };

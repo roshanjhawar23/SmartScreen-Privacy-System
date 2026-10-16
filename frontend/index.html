@@ -34,6 +34,11 @@
       </div>
     </div>
 
+    <div class="gate-row">
+      <span id="gate-status" aria-live="polite">Presence Gate ready</span>
+      <button id="gateBtn" type="button" aria-pressed="true" title="Hide the screen unless the owner is verified">Presence Gate</button>
+    </div>
+
     <div id="panelBody">
       <div class="section-label section-heading">EFFECTS</div>
       <div class="action-grid">
@@ -64,6 +69,7 @@
         </div>
       </div>
 
+      <button id="retryBtn" class="retry-action" type="button" hidden>Retry</button>
       <button id="aiBtn" class="primary-action" type="button">Enable Protection</button>
     </div>
 

@@ -128,23 +128,32 @@ function createProtectionSequence(deps){
     if(state === 'NO_USER'){
       if(active !== 'WALK_AWAY') armWalkAway();
     }else if(state === 'OWNER_PRESENT'){
-      if(active === 'WALK_AWAY') cancel('owner-returned');
+      // Owner alone again: a walk-away or a threat that has ended is cancelled
+      // (owner decision 2026-10-16). The Presence Gate still re-verifies before revealing.
+      if(active === 'WALK_AWAY' || active === 'THREAT') cancel('owner-returned');
       cancelWalkAway('owner-present');
     }else if(THREAT_STATES.has(state)){
       if(active === 'WALK_AWAY') cancel('privacy-threat');
       if(active !== 'THREAT') startThreat();
     }else{
-      cancel(`state-${state}`);
-      cancelWalkAway(`state-${state}`);
+      // CAMERA_ERROR, AI_UNAVAILABLE or an unknown state: monitoring is no longer reliable.
+      handleMonitorFailure(`state-${state}`);
     }
   }
 
   // Called when monitoring fails (AI error, camera error, watchdog, unexpected exit).
-  // KNOWN DEFECT (fixed in Phase 1.5 by the Presence Gate): this cancels the
-  // sequence, which sends CLEAR and reveals the screen — it fails open.
+  // Fail closed: timers stop, but the current effects stay on (no CLEAR). The
+  // Presence Gate FAILSAFE curtain takes over concealment.
   function handleMonitorFailure(reason='ai-failed'){
-    cancel(reason);
-    cancelWalkAway(reason);
+    const hadTimers = Boolean(walkAwayTimer || walkAwayCountdownTimer || walkAwayFocusTimer || threatLockTimer || threatFocusTimer);
+    clearWalkAwayTimers();
+    if(threatFocusTimer){ timers.clearTimeout(threatFocusTimer); threatFocusTimer=null; }
+    if(threatLockTimer){ timers.clearTimeout(threatLockTimer); threatLockTimer=null; }
+    if(active || hadTimers){
+      log(`PROTECTION_SEQUENCE_HALTED|type=${active || 'NONE'}|reason=${reason}`);
+      sendWalkAwayStatus('CANCELLED',0);
+    }
+    active=null;
   }
 
   // Called when the user deliberately disables protection.

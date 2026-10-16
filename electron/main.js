@@ -1,4 +1,4 @@
-const { app, BrowserWindow, globalShortcut, ipcMain, Tray, Menu, dialog, session, safeStorage, screen, desktopCapturer } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, Tray, Menu, dialog, session, safeStorage, screen, desktopCapturer, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
@@ -10,6 +10,7 @@ const { createProtectionSequence } = require('./protection_sequence');
 const { planOverlayWindows } = require('./display_layout');
 const { clampLevel } = require('../frontend/intensity');
 const { createScreenLocker, isTestMode } = require('./screen_lock');
+const { createPresenceGate } = require('./presence_gate');
 
 // Self-test harness only (SMARTSCREEN_TEST=1): isolated profile and a recorded camera source.
 const TEST_MODE = isTestMode();
@@ -40,6 +41,10 @@ let lastIntruderImage = '';
 let lastAIHeartbeat = 0;
 let aiWatchdog = null;
 let aiFailureReported = false;
+let lastAIState = null;       // AI_STATE is logged on change only (the backend re-emits ~400 ms)
+let curtainState = { on:false, effect:'blackout' };
+let contentProtected = false;
+let trayStatus = { icon:'icon-gray.png', tooltip:'SmartScreen Privacy Suite' };
 
 function writeLog(event){
   if(!logDir){
@@ -130,8 +135,20 @@ function createOverlayWindow(bounds, role){
   overlay.setIgnoreMouseEvents(true,{forward:true});
   overlay.setAlwaysOnTop(true,'screen-saver');
   overlay.setVisibleOnAllWorkspaces(true);
-  overlay.setContentProtection(Boolean(lastRenderState?.pixelate));
+  overlay.setContentProtection(contentProtected);
+  overlay.webContents.on('did-finish-load',()=>{
+    if(!overlay.isDestroyed()) overlay.webContents.send('presence-curtain', curtainState);
+  });
   return overlay;
+}
+
+// Pixelate (manual or curtain) captures the screen; exclude our own overlays from that capture.
+// Only while pixelate is on, so screen sharing still sees the other effects.
+function updateContentProtection(){
+  const wanted = Boolean(lastRenderState?.pixelate) || (curtainState.on && curtainState.effect === 'pixelate');
+  if(wanted === contentProtected) return;
+  contentProtected = wanted;
+  for(const overlay of allOverlayWindows()) overlay.setContentProtection(wanted);
 }
 
 function createWindow(){
@@ -216,14 +233,8 @@ function sanitizeRenderState(state){
 ipcMain.on('overlay-render-state',(event,state)=>{
   if(!win || event.sender !== win.webContents) return;
   const next = sanitizeRenderState(state);
-  const pixelateChanged = Boolean(lastRenderState?.pixelate) !== next.pixelate;
   lastRenderState = next;
-
-  // Pixelate captures the screen; exclude our own overlays from that capture.
-  // Only while pixelate is on, so screen sharing still sees the other effects.
-  if(pixelateChanged){
-    for(const overlay of allOverlayWindows()) overlay.setContentProtection(next.pixelate);
-  }
+  updateContentProtection();
   for(const { window } of secondaryWindows.values()){
     if(!window.isDestroyed()) window.webContents.send('overlay-render-state', next);
   }
@@ -251,7 +262,7 @@ function createTray(){
   tray = new Tray(path.join(assetPath,'icon-gray.png'));
   const menu = Menu.buildFromTemplate([
     { label:'Show Overlay', click:()=>allOverlayWindows().forEach((w)=>w.show()) },
-    { label:'Hide Overlay', click:()=>allOverlayWindows().forEach((w)=>w.hide()) },
+    { label:'Hide Overlay', click:hideOverlays },
     { type:'separator' },
     { label:'Protection status: Local device', enabled:false },
     { type:'separator' },
@@ -259,6 +270,23 @@ function createTray(){
   ]);
   tray.setToolTip('SmartScreen Privacy Suite');
   tray.setContextMenu(menu);
+}
+
+function hideOverlays(){
+  // Hiding the overlay while the curtain is up would reveal the screen.
+  if(curtainState.on){
+    writeLog('OVERLAY_HIDE_REFUSED|reason=presence-curtain');
+    return;
+  }
+  allOverlayWindows().forEach((w)=>w.hide());
+}
+
+// While concealed the tooltip shows no protection state (MASTER_PROMPT 1.5 rule 10).
+function setTrayStatus(icon, tooltip){
+  trayStatus = { icon, tooltip };
+  if(!tray) return;
+  tray.setImage(path.join(assetPath, icon));
+  tray.setToolTip(curtainState.on ? 'SmartScreen Privacy Suite' : tooltip);
 }
 
 function registerShortcuts(){
@@ -562,10 +590,26 @@ const protection = createProtectionSequence({
   lock:lockScreen
 });
 
+// Presence Gate: owns the privacy curtain. The curtain is sent to every overlay window
+// directly (not relayed by the primary renderer), so each display conceals on its own.
+const presenceGate = createPresenceGate({
+  getSettings:()=>settings,
+  log:writeLog,
+  lock:lockScreen,
+  onChange:(snapshot)=>{
+    curtainState = { on:snapshot.curtain, effect:snapshot.effect };
+    for(const overlay of allOverlayWindows()) overlay.webContents.send('presence-curtain', curtainState);
+    updateContentProtection();
+    setTrayStatus(trayStatus.icon, trayStatus.tooltip);
+    if(win && !win.isDestroyed()) win.webContents.send('presence-gate', snapshot);
+  }
+});
+
 function sendAIState(payload){
   if(!win || win.isDestroyed()) return;
   win.webContents.send('ai-state', payload);
   protection.updateForState(payload.state);
+  presenceGate.update(payload.state, payload);
 
   switch(payload.state){
     case 'OWNER_PRESENT':
@@ -588,15 +632,16 @@ function sendAIState(payload){
 
 // Report a monitoring failure to the renderer once per AI run, so a later
 // generic "exited with code 1" does not overwrite a specific CAMERA_ERROR.
-function reportAIFailure(kind, message){
+function reportAIFailure(kind, message, reason){
   protection.handleMonitorFailure(`ai-failed-${kind}`);
+  presenceGate.failsafe(reason || (kind === 'CAMERA_ERROR' ? 'camera-error' : 'ai-unavailable'));
   if(aiFailureReported) return;
   aiFailureReported = true;
   win?.webContents.send('ai-failed',{kind,message});
 }
 
+// Ends the backend process. Protection state is the caller's decision.
 function stopAIProcess(){
-  protection.stop('ai-stopped');
   if(aiWatchdog){ clearInterval(aiWatchdog); aiWatchdog=null; }
   if(!pythonProcess) return;
   try{ pythonProcess.stdin.write('STOP\n'); }catch{}
@@ -612,7 +657,7 @@ function startAIWatchdog(){
     if(!pythonProcess || !win || win.isDestroyed()) return;
     if(Date.now() - lastAIHeartbeat > timeoutMs){
       writeLog('AI_WATCHDOG_TIMEOUT');
-      reportAIFailure('AI_UNAVAILABLE','The privacy recognition service stopped responding.');
+      reportAIFailure('AI_UNAVAILABLE','The privacy recognition service stopped responding.','watchdog-timeout');
       stopAIProcess();
     }
   },2000);
@@ -625,7 +670,22 @@ ipcMain.on('set-ignore-mouse',(_event,val)=>{
 
 ipcMain.on('start-ai',()=>{
   if(!win || pythonProcess) return;
+  // The curtain goes up before the camera starts.
+  if(presenceGate.state === 'FAILSAFE') presenceGate.retry();
+  else presenceGate.start();
+  startAI();
+});
+
+ipcMain.on('retry-protection',()=>{
+  if(!win || pythonProcess) return;
+  if(!presenceGate.retry()) return;
+  writeLog('PROTECTION_RETRY');
+  startAI();
+});
+
+function startAI(){
   aiFailureReported = false;
+  lastAIState = null;
 
   let template;
   try{
@@ -696,6 +756,7 @@ ipcMain.on('start-ai',()=>{
     minFaceSize: Math.max(40, Number(settings.minimumFaceSize ?? 70)),
     noUserDetectionDelay: Math.max(0.5, Number(settings.noUserDetectionDelay ?? 1.5)),
     cameraFailureTimeout: Math.max(0.5, Number(settings.cameraFailureTimeout ?? 3)),
+    stateUpdateInterval: Math.max(0, Number(settings.aiStateUpdateInterval ?? 0.4)),
     logDir: logPath
   };
   // The backend ignores cameraSource unless SMARTSCREEN_TEST=1 is set too.
@@ -718,7 +779,8 @@ ipcMain.on('start-ai',()=>{
     }else if(msg.startsWith('STATE|')){
       lastAIHeartbeat = Date.now();
       const payload = parseStateMessage(msg);
-      writeLog(`AI_STATE|${msg}`);
+      if(payload.state !== lastAIState) writeLog(`AI_STATE|${msg}`);
+      lastAIState = payload.state;
       sendAIState(payload);
     }else if(msg.startsWith('PHOTO_SAVED|')){
       lastIntruderImage=msg.split('|').slice(1).join('|') || '';
@@ -766,34 +828,41 @@ ipcMain.on('start-ai',()=>{
     pythonProcess=null;
     if(aiWatchdog){ clearInterval(aiWatchdog); aiWatchdog=null; }
 
-    if(code && code !== 0){
-      reportAIFailure('AI_UNAVAILABLE',`The privacy recognition service stopped unexpectedly (exit code ${code}).`);
-      return;
-    }
-
-    win?.webContents.send('ai-stopped',{code});
+    // We did not stop it (stopAIProcess clears pythonProcess first): any exit is a failure.
+    reportAIFailure('AI_UNAVAILABLE',`The privacy recognition service stopped unexpectedly (exit code ${code}).`,'backend-exit');
   });
-});
+}
 
+// Deliberate disable (the renderer asks for confirmation first). The only manual way,
+// besides quitting, to remove the curtain.
 ipcMain.on('stop-ai',()=>{
   stopAIProcess();
+  protection.stop('ai-stopped');
+  presenceGate.stop('protection-disabled');
   setTimeout(()=>win?.webContents.send('ai-stopped'),150);
 });
 
+ipcMain.handle('get-presence-gate',()=>presenceGate.snapshot());
+ipcMain.handle('set-presence-gate',(_event,enabled)=>{
+  const ok = presenceGate.setEnabled(enabled === true);
+  if(ok) writeLog(`PRESENCE_GATE_SETTING|enabled=${enabled === true}`);
+  return { ok, snapshot:presenceGate.snapshot() };
+});
+
 ipcMain.on('ai-enabled',()=>{
-  if(tray){ tray.setImage(path.join(assetPath,'icon-green.png')); tray.setToolTip('SmartScreen Privacy Suite — Protection active'); }
+  setTrayStatus('icon-green.png','SmartScreen Privacy Suite — Protection active');
 });
 
 ipcMain.on('ai-disabled',()=>{
-  if(tray){ tray.setImage(path.join(assetPath,'icon-gray.png')); tray.setToolTip('SmartScreen Privacy Suite — Protection inactive'); }
+  setTrayStatus('icon-gray.png','SmartScreen Privacy Suite — Protection inactive');
 });
 
 ipcMain.on('ai-intruder-alert',()=>{
-  if(tray){ tray.setImage(path.join(assetPath,'icon-red.png')); tray.setToolTip('SmartScreen Privacy Suite — Privacy threat detected'); }
+  setTrayStatus('icon-red.png','SmartScreen Privacy Suite — Privacy threat detected');
 });
 
 ipcMain.on('ai-intruder-cleared',()=>{
-  if(tray){ tray.setImage(path.join(assetPath,'icon-green.png')); tray.setToolTip('SmartScreen Privacy Suite — Protection active'); }
+  setTrayStatus('icon-green.png','SmartScreen Privacy Suite — Protection active');
 });
 
 ipcMain.on('lock-screen',(_event, reason)=>{
@@ -838,6 +907,11 @@ app.whenReady().then(()=>{
   for(const eventName of ['display-added','display-removed','display-metrics-changed']){
     screen.on(eventName,()=>syncOverlayWindows());
   }
+
+  // Never unlocks Windows: after a lock, unlock or resume the gate conceals and re-verifies.
+  powerMonitor.on('lock-screen',()=>presenceGate.sessionLocked());
+  powerMonitor.on('unlock-screen',()=>presenceGate.sessionUnlocked());
+  powerMonitor.on('resume',()=>presenceGate.resumed());
 
   const profile = readProfile(app.getPath('userData'));
   if(!profile?.setupComplete){

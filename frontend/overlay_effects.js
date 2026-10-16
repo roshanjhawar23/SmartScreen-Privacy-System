@@ -117,7 +117,7 @@
     const vignetteLayer = document.getElementById('vignetteLayer');
 
     const pixelate = createPixelateController(api, pixelateLayer, pixelateCanvas);
-    let state = { blur: false, pixelate: false, blackout: false, focus: false, vignette: false, level: Intensity.DEFAULT_LEVEL };
+    let state = { blur: false, pixelate: false, blackout: false, focus: false, vignette: false, level: Intensity.DEFAULT_LEVEL, curtain: null };
     let pointerX = initialPointer?.x ?? window.innerWidth / 2;
     let pointerY = initialPointer?.y ?? window.innerHeight / 2;
 
@@ -125,25 +125,45 @@
       focusLayer.style.background = `radial-gradient(circle 120px at ${pointerX}px ${pointerY}px, transparent 0px, rgba(0,0,0,${params.focusDarkness}) 150px)`;
     }
 
+    // Presence Gate curtain ({ on, effect }) is drawn at full intensity on top of the
+    // manual effects and appears without the fade-in transition.
+    function curtainEffect() {
+      return state.curtain && state.curtain.on ? state.curtain.effect || 'blackout' : null;
+    }
+
+    function setInstant(layer, instant) {
+      layer.style.transition = instant ? 'none' : '';
+    }
+
     function apply(next) {
       state = { ...state, ...next };
       const params = Intensity.computeIntensity(state.level);
+      const full = Intensity.computeIntensity(100);
+      const curtain = curtainEffect();
 
-      blurLayer.style.backdropFilter = `blur(${params.blurPx}px)`;
-      blurLayer.style.webkitBackdropFilter = `blur(${params.blurPx}px)`;
-      blurLayer.style.background = `rgba(0,0,0,${params.dimOpacity})`;
-      blurLayer.style.opacity = state.blur ? '1' : '0';
+      const blurCurtain = curtain === 'blur';
+      const blurPx = blurCurtain ? full.blurPx : params.blurPx;
+      blurLayer.style.backdropFilter = `blur(${blurPx}px)`;
+      blurLayer.style.webkitBackdropFilter = `blur(${blurPx}px)`;
+      blurLayer.style.background = `rgba(0,0,0,${blurCurtain ? full.dimOpacity : params.dimOpacity})`;
+      setInstant(blurLayer, blurCurtain);
+      blurLayer.style.opacity = state.blur || blurCurtain ? '1' : '0';
 
-      pixelate.update(Boolean(state.pixelate), params.pixelBlockPx);
+      const pixelCurtain = curtain === 'pixelate';
+      setInstant(pixelateLayer, pixelCurtain);
+      pixelate.update(Boolean(state.pixelate) || pixelCurtain, pixelCurtain ? full.pixelBlockPx : params.pixelBlockPx);
 
-      blackoutLayer.style.background = `rgba(0,0,0,${params.blackoutOpacity})`;
-      blackoutLayer.style.opacity = state.blackout ? '1' : '0';
+      const blackCurtain = curtain === 'blackout';
+      blackoutLayer.style.background = `rgba(0,0,0,${blackCurtain ? 1 : params.blackoutOpacity})`;
+      setInstant(blackoutLayer, blackCurtain);
+      blackoutLayer.style.opacity = state.blackout || blackCurtain ? '1' : '0';
 
       if (state.focus) renderFocus(params);
       focusLayer.style.opacity = state.focus ? '1' : '0';
 
       vignetteLayer.style.background = `radial-gradient(circle at center, rgba(0,0,0,0) 40%, rgba(0,0,0,${params.vignetteOpacity}) 85%)`;
       vignetteLayer.style.opacity = state.vignette ? '1' : '0';
+      document.body.classList.toggle('curtain-on', Boolean(curtain));
     }
 
     document.addEventListener('mousemove', (event) => {

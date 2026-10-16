@@ -22,10 +22,20 @@ security boundary: SmartScreen may lock the session but never unlocks it or bypa
   safe side (camera unavailable). A driver that shows a *changing* placeholder animation would not
   be detected.
 
-## Fail-closed (known defect until Phase 1.5)
-A monitoring failure (camera error, backend crash, watchdog timeout) currently removes automatic
-protection effects, which reveals the screen. The Phase 1.5 Presence Gate fixes this. It is tracked by a
-`todo` unit test and by expected-failure e2e tests (`FAIL-CLOSED ...` in `tests/e2e/protection.spec.js`).
+## Presence Gate and fail-closed (Phase 1.5)
+- While protection is on, the screen is concealed by a privacy curtain (default: full blackout on every
+  display) unless the enrolled owner has been verified continuously (≥ 3 consecutive updates and ≥ 1.2 s).
+  Unrecognized faces never reveal it.
+- **Fail closed:** a camera error, a crash or exit of the recognition service, a watchdog timeout or an
+  unknown state puts the gate in FAILSAFE: the curtain stays up until a Retry plus owner verification, or
+  a confirmed Disable Protection. This also applies when the Presence Gate toggle is off.
+- The tray "Hide Overlay" item is refused while the curtain is up.
+- **The curtain is a visibility control, not a security boundary.** It is an always-on-top window. It
+  cannot cover what Windows draws above all apps (secure desktop: UAC prompts, Ctrl+Alt+Del, the lock
+  screen), and other surfaces may also appear above it. The live-check coverage matrix in
+  `docs/testing/phase-1.5-results.md` records what was observed. Windows lock is the security boundary.
+- Anyone at the keyboard can disable protection (with a confirmation) or quit the app; SmartScreen
+  does not authenticate that person. It never unlocks Windows.
 
 ## Pixelate
 While pixelate is on, the overlay is excluded from screen capture (so it can capture the screen

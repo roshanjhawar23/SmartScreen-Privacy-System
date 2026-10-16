@@ -176,3 +176,28 @@ def test_image_health_dark_but_textured_scene_is_ok():
     health = ImageHealth(failure_timeout=1.0)
     for i in range(50):
         assert health.check(i * 0.1, mean=8.0, std=9.0, signature=bytes([i])) is None
+
+
+# --- periodic updates (Presence Gate needs a steady stream of owner updates) ---
+
+def test_periodic_updates_for_stable_owner():
+    # frames at t = 0.1 .. 2.0; confirmed at 0.2, then re-emitted at 0.6, 1.0, 1.4, 1.8
+    events = feed(StateTracker(confirm_frames=2, update_interval=0.4), [OWNER] * 20)
+    assert [e.state for e in events] == ["OWNER_PRESENT"] * 5
+    assert all(not e.snapshot for e in events)
+
+
+def test_periodic_threat_updates_never_repeat_snapshots():
+    events = feed(StateTracker(confirm_frames=1, update_interval=0.3), [UNKNOWN] * 12)
+    assert [e.snapshot for e in events] == [True] + [False] * (len(events) - 1)
+    assert len(events) > 2
+
+
+def test_periodic_updates_reset_on_change():
+    tracker = StateTracker(confirm_frames=1, update_interval=1.0)
+    events = feed(tracker, [OWNER, OWNER, UNKNOWN, OWNER, OWNER])
+    assert [e.state for e in events] == ["OWNER_PRESENT", "UNKNOWN_PERSON", "OWNER_PRESENT"]
+
+
+def test_no_periodic_updates_by_default():
+    assert len(feed(StateTracker(confirm_frames=1), [OWNER] * 30)) == 1

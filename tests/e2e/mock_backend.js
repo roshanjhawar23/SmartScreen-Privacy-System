@@ -7,11 +7,12 @@
 // Scenario file:
 // {
 //   "heartbeatMs": 2000,               // AI_HEARTBEAT interval while heartbeats are on
+//   "stateUpdateMs": 400,              // face states are re-emitted like the real backend (0 = off)
 //   "steps": [
 //     { "at": 0,    "emit": "AI_READY" },
 //     { "at": 300,  "state": "OWNER_PRESENT" },          // formatted like the real backend
 //     { "at": 2000, "state": "UNKNOWN_PERSON", "snapshot": true },
-//     { "at": 4000, "heartbeat": false },                // simulate a hung vision loop
+//     { "at": 4000, "heartbeat": false },                // simulate a hung vision loop (all output stops)
 //     { "at": 5000, "emit": "AI_ERROR|CAMERA_ERROR|..." },
 //     { "at": 5050, "exit": 1 }
 //   ]
@@ -44,14 +45,33 @@ function parseScenario(raw){
     if(kinds.length !== 1) throw new Error(`Step ${i}: exactly one of emit/state/heartbeat/exit.`);
     return { ...step, at };
   }).sort((a, b) => a.at - b.at);
-  return { heartbeatMs:Math.max(100, Number(scenario.heartbeatMs ?? 2000)), steps };
+  return {
+    heartbeatMs:Math.max(100, Number(scenario.heartbeatMs ?? 2000)),
+    stateUpdateMs:Math.max(0, Number(scenario.stateUpdateMs ?? 400)),
+    steps
+  };
 }
 
 // Pure scheduler: timers and output are injected so it can be unit-tested.
 function runScenario(scenario, { emit, exit, timers = { setTimeout, clearTimeout, setInterval, clearInterval } }){
   const handles = [];
   let heartbeat = null;
+  let repeat = null;
   let stopped = false;
+
+  // Face states (not NO_USER) are re-emitted while stable, like StateTracker.update_interval.
+  function stopRepeat(){
+    if(repeat){ timers.clearInterval(repeat); repeat = null; }
+  }
+  function emitState(step){
+    stopRepeat();
+    const line = formatState(step.state, step.counts);
+    emit(line);
+    if(step.snapshot) emit(`PHOTO_SAVED|mock-snapshot-${step.at}.jpg`);
+    if(scenario.stateUpdateMs > 0 && step.state !== 'NO_USER'){
+      repeat = timers.setInterval(() => emit(line), scenario.stateUpdateMs);
+    }
+  }
 
   function startHeartbeat(){
     if(!heartbeat) heartbeat = timers.setInterval(() => emit('AI_HEARTBEAT'), scenario.heartbeatMs);
@@ -63,6 +83,7 @@ function runScenario(scenario, { emit, exit, timers = { setTimeout, clearTimeout
     if(stopped) return;
     stopped = true;
     stopHeartbeat();
+    stopRepeat();
     handles.forEach((h) => timers.clearTimeout(h));
     exit(code);
   }
@@ -71,12 +92,13 @@ function runScenario(scenario, { emit, exit, timers = { setTimeout, clearTimeout
   for(const step of scenario.steps){
     handles.push(timers.setTimeout(() => {
       if(stopped) return;
-      if('emit' in step) emit(String(step.emit));
-      else if('state' in step){
-        emit(formatState(step.state, step.counts));
-        if(step.snapshot) emit(`PHOTO_SAVED|mock-snapshot-${step.at}.jpg`);
-      }else if('heartbeat' in step){
-        if(step.heartbeat) startHeartbeat(); else stopHeartbeat();
+      if('emit' in step){
+        if(String(step.emit).startsWith('AI_ERROR|')) stopRepeat();
+        emit(String(step.emit));
+      }else if('state' in step) emitState(step);
+      else if('heartbeat' in step){
+        if(step.heartbeat) startHeartbeat();
+        else { stopHeartbeat(); stopRepeat(); }
       }else if('exit' in step) stop(Number(step.exit) || 0);
     }, step.at));
   }

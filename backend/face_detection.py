@@ -72,6 +72,7 @@ def parse_config(raw: dict) -> dict:
     config["confirmFrames"] = max(1, int(config.get("confirmFrames", 5)))
     config["minFaceSize"] = max(40, int(config.get("minFaceSize", 70)))
     config["noUserDetectionDelay"] = max(0.5, float(config.get("noUserDetectionDelay", 1.5)))
+    config["stateUpdateInterval"] = max(0.0, float(config.get("stateUpdateInterval", 0.4)))
     config["cameraFailureTimeout"] = max(0.5, float(config.get("cameraFailureTimeout", CAMERA_FAILURE_TIMEOUT)))
     config["logDir"] = str(config.get("logDir") or default_log_dir())
     # Test-only: ignored (always "webcam") unless SMARTSCREEN_TEST=1.
@@ -158,6 +159,7 @@ def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None
         confirm_frames=int(config["confirmFrames"]),
         no_user_delay=float(config["noUserDetectionDelay"]),
         start_time=clock(),
+        update_interval=float(config["stateUpdateInterval"]),
     )
     camera_health = CameraHealth(failure_timeout=float(config["cameraFailureTimeout"]))
     image_health = ImageHealth(failure_timeout=float(config["cameraFailureTimeout"]))

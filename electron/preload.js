@@ -8,6 +8,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   publishRenderState:(state)=>ipcRenderer.send('overlay-render-state',state),
   onRenderState:(cb)=>ipcRenderer.on('overlay-render-state',(_,data)=>cb(data)),
   getCaptureSource:()=>ipcRenderer.invoke('get-capture-source'),
+  onPresenceCurtain:(cb)=>ipcRenderer.on('presence-curtain',(_,data)=>cb(data)),
+  onPresenceGate:(cb)=>ipcRenderer.on('presence-gate',(_,data)=>cb(data)),
+  getPresenceGate:()=>ipcRenderer.invoke('get-presence-gate'),
+  setPresenceGate:(enabled)=>ipcRenderer.invoke('set-presence-gate',enabled),
+  retryProtection:()=>ipcRenderer.send('retry-protection'),
 
   setIgnoreMouse:(v)=>ipcRenderer.send('set-ignore-mouse',v),
 

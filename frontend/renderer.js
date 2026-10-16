@@ -9,6 +9,7 @@ if (isSecondaryOverlay) {
   // Cursor is usually on another display: darken everything until it arrives.
   const effects = window.SmartScreenEffects.create({ api: window.electronAPI, initialPointer: { x: -10000, y: -10000 } });
   window.electronAPI.onRenderState((state) => effects.apply(state));
+  window.electronAPI.onPresenceCurtain((curtain) => effects.apply({ curtain }));
 } else {
   startPrimaryOverlay();
 }
@@ -16,6 +17,8 @@ if (isSecondaryOverlay) {
 function startPrimaryOverlay() {
 const effects = window.SmartScreenEffects.create({ api: window.electronAPI });
 const INTENSITY_STORAGE_KEY = 'smartscreen.privacyIntensity';
+const GATE_STORAGE_KEY = 'smartscreen.presenceGate';
+window.electronAPI.onPresenceCurtain((curtain) => effects.apply({ curtain }));
 
 let blurOn = false;
 let pixelateOn = false;
@@ -33,6 +36,7 @@ let notificationTimer = null;
 let automaticBlurOn = false;
 let automaticFocusOn = false;
 let intensityLevel = loadIntensity();
+let gate = { state: 'DISABLED', reason: '', curtain: false, enabled: true, active: false };
 let appSettings = {
   noUserLockEnabled: true,
   walkAwayLockDelay: 6000,
@@ -61,6 +65,9 @@ const focusValue = document.getElementById('focusValue');
 const vignetteValue = document.getElementById('vignetteValue');
 const intensitySlider = document.getElementById('intensitySlider');
 const intensityValue = document.getElementById('intensityValue');
+const gateStatus = document.getElementById('gate-status');
+const gateBtn = document.getElementById('gateBtn');
+const retryBtn = document.getElementById('retryBtn');
 
 function loadIntensity() {
   try {
@@ -286,8 +293,7 @@ function applyState(payload) {
 
     case STATES.AI_UNAVAILABLE:
       clearAllTimers();
-      // KNOWN DEFECT (Phase 1.5 Presence Gate fixes this): failing open.
-      clearAutomaticProtection();
+      // Fail closed: automatic effects stay on; the Presence Gate FAILSAFE curtain conceals.
       setStatus('Protection unavailable');
       setLiveIdentity('Verification unavailable');
       break;
@@ -361,6 +367,77 @@ effectsBtn?.addEventListener('click', () => {
   const open = !effectsPanel?.hidden;
   if (effectsPanel) effectsPanel.hidden = open;
   effectsBtn?.setAttribute('aria-expanded', String(!open));
+});
+
+function gateStatusText(snapshot) {
+  const reason = snapshot.reason || '';
+  switch (snapshot.state) {
+    case 'CONCEALED':
+      if (reason.startsWith('threat-')) return 'Screen concealed — unrecognized person';
+      if (reason === 'owner-absent' || reason === 'no-user') return 'Screen concealed — owner absent';
+      if (reason.startsWith('session-') || reason === 'system-resumed') return 'Screen concealed — verify to reveal';
+      return 'Screen concealed — verifying owner';
+    case 'VERIFYING': return 'Verifying owner…';
+    case 'REVEALED': return 'Screen visible — owner verified';
+    case 'ABSENCE_GRACE': return 'Owner not visible — concealing';
+    case 'FAILSAFE':
+      return reason === 'camera-error'
+        ? 'Camera unavailable — screen protected'
+        : 'Verification unavailable — screen protected';
+    default:
+      return snapshot.enabled ? 'Presence Gate ready' : 'Presence Gate off';
+  }
+}
+
+function applyGate(snapshot) {
+  if (!snapshot) return;
+  gate = { ...gate, ...snapshot };
+  if (gateStatus) {
+    gateStatus.textContent = gateStatusText(gate);
+    gateStatus.classList.toggle('is-concealed', Boolean(gate.curtain));
+    gateStatus.classList.toggle('is-failsafe', gate.state === 'FAILSAFE');
+  }
+  updateButtonState(gateBtn, gate.enabled);
+  // The toggle cannot remove the curtain: it only changes while protection is off.
+  if (gateBtn) gateBtn.disabled = Boolean(gate.active);
+  if (retryBtn) retryBtn.hidden = gate.state !== 'FAILSAFE';
+  if (gate.state === 'FAILSAFE') {
+    // Protection stays on in FAILSAFE: leaving it needs Retry or a confirmed Disable.
+    aiEnabled = true;
+    if (aiBtn) aiBtn.textContent = 'Disable Protection';
+  }
+}
+
+function loadGatePreference() {
+  try {
+    const stored = window.localStorage.getItem(GATE_STORAGE_KEY);
+    if (stored !== null) return stored === 'true';
+  } catch {}
+  return true;
+}
+
+async function setGateEnabled(enabled) {
+  const result = await window.electronAPI.setPresenceGate(Boolean(enabled));
+  if (result?.ok) {
+    try { window.localStorage.setItem(GATE_STORAGE_KEY, String(Boolean(enabled))); } catch {}
+  }
+  applyGate(result?.snapshot);
+}
+
+gateBtn?.addEventListener('click', () => {
+  if (gate.active) return;
+  setGateEnabled(!gate.enabled);
+});
+
+retryBtn?.addEventListener('click', () => {
+  if (gate.state !== 'FAILSAFE') return;
+  applyState({ state: STATES.STARTING });
+  window.electronAPI.retryProtection();
+});
+
+window.electronAPI.onPresenceGate((snapshot) => {
+  applyGate(snapshot);
+  refreshSecurityEvents();
 });
 
 async function toggleAI() {
@@ -457,9 +534,7 @@ window.electronAPI.onAIFailed((_event, failure) => {
   const message = typeof failure === 'object' && failure ? failure.message : failure;
   const state = kind === 'CAMERA_ERROR' ? STATES.CAMERA_ERROR : STATES.AI_UNAVAILABLE;
 
-  aiEnabled = false;
-  aiBtn.textContent = 'Enable Protection';
-  window.electronAPI.notifyAIDisabled();
+  // Protection stays on: main has put the Presence Gate in FAILSAFE (screen concealed).
   applyState({ state });
 
   if (message) console.error(message);
@@ -591,6 +666,7 @@ window.electronAPI.onBiometricUpdated(() => {
 
 // Startup — runs exactly once.
 setIntensity(intensityLevel);
+setGateEnabled(loadGatePreference());
 refreshBiometricStatus();
 refreshSecurityEvents();
 setInterval(() => { if (aiEnabled) refreshSecurityEvents(); }, 5000);

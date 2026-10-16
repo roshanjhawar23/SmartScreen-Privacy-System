@@ -91,9 +91,8 @@ test('deliberate stop clears protection', () => {
   assert.equal(t.timers.pendingCount, 0);
 });
 
-// Phase 0 item 6 — fail-open. Expected to FAIL until the Phase 1.5 Presence Gate
-// lands; marked todo so it is reported without blocking the suite.
-test('monitor failure must not reveal the screen (fail-closed)', { todo: 'fixed by Phase 1.5 Presence Gate' }, () => {
+// Phase 0 item 6 — fail-open, fixed in Phase 1.5 (was a todo until then).
+test('monitor failure must not reveal the screen (fail-closed)', () => {
   for (const failure of ['ai-failed-CAMERA_ERROR', 'ai-failed-AI_UNAVAILABLE', 'watchdog']) {
     const t = setup();
     t.seq.updateForState('UNKNOWN_PERSON');
@@ -104,4 +103,34 @@ test('monitor failure must not reveal the screen (fail-closed)', { todo: 'fixed 
   t.seq.updateForState('UNKNOWN_PERSON');
   t.seq.updateForState('CAMERA_ERROR');
   assert.ok(!t.actions.some((a) => a.startsWith('CLEAR')), 'CAMERA_ERROR state revealed the screen');
+});
+
+test('monitor failure halts timers without locking or clearing', () => {
+  const t = setup();
+  t.seq.updateForState('NO_USER');
+  t.seq.handleMonitorFailure('ai-failed-CAMERA_ERROR');
+  t.timers.advance(20000);
+  assert.deepEqual(t.locks, []);
+  assert.deepEqual(t.actions, ['BLUR:walk-away']);
+  assert.ok(t.logs.includes('PROTECTION_SEQUENCE_HALTED|type=WALK_AWAY|reason=ai-failed-CAMERA_ERROR'));
+  assert.equal(t.timers.pendingCount, 0);
+});
+
+test('threat recovery: owner alone again cancels the threat lock', () => {
+  const t = setup();
+  t.seq.updateForState('UNKNOWN_PERSON');
+  t.timers.advance(1500);
+  t.seq.updateForState('OWNER_PRESENT');
+  t.timers.advance(10000);
+  assert.deepEqual(t.locks, []);
+  assert.ok(t.logs.includes('PROTECTION_SEQUENCE_CANCELLED|type=THREAT|reason=owner-returned'));
+  assert.equal(t.timers.pendingCount, 0);
+});
+
+test('owner together with an unknown person does not cancel the threat', () => {
+  const t = setup();
+  t.seq.updateForState('UNKNOWN_PERSON');
+  t.seq.updateForState('OWNER_AND_UNKNOWN');
+  t.timers.advance(5000);
+  assert.deepEqual(t.locks, ['privacy-threat']);
 });

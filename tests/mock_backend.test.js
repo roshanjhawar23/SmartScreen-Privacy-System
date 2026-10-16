@@ -25,7 +25,7 @@ test('state lines match the real backend format and parse', () => {
 });
 
 test('steps fire in time order with heartbeats', () => {
-  const t = run({ heartbeatMs:1000, steps:[
+  const t = run({ heartbeatMs:1000, stateUpdateMs:0, steps:[
     { at:1500, state:'NO_USER' },
     { at:0, emit:'AI_READY' },
     { at:2500, state:'UNKNOWN_PERSON', snapshot:true }
@@ -40,6 +40,27 @@ test('steps fire in time order with heartbeats', () => {
     'PHOTO_SAVED|mock-snapshot-2500.jpg',
     'AI_HEARTBEAT'
   ]);
+});
+
+test('face states repeat like the real backend; NO_USER, errors and hangs stop them', () => {
+  const owner = formatState('OWNER_PRESENT');
+  const t = run({ heartbeatMs:10000, stateUpdateMs:400, steps:[
+    { at:0, state:'OWNER_PRESENT' },
+    { at:1000, state:'NO_USER' },
+    { at:2000, state:'UNKNOWN_PERSON', snapshot:true },
+    { at:2900, heartbeat:false }
+  ] });
+  t.timers.advance(5000);
+  assert.deepEqual(t.lines, [
+    owner, owner, owner, // 0, 400, 800
+    formatState('NO_USER'),
+    formatState('UNKNOWN_PERSON'), 'PHOTO_SAVED|mock-snapshot-2000.jpg',
+    formatState('UNKNOWN_PERSON'), formatState('UNKNOWN_PERSON') // 2400, 2800, then hung
+  ]);
+
+  const e = run({ heartbeatMs:10000, steps:[{ at:0, state:'OWNER_PRESENT' }, { at:500, emit:'AI_ERROR|CAMERA_ERROR|x' }] });
+  e.timers.advance(3000);
+  assert.deepEqual(e.lines, [owner, owner, 'AI_ERROR|CAMERA_ERROR|x']);
 });
 
 test('heartbeat can stop (hang) and exit ends everything', () => {

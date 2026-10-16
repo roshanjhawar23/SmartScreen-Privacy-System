@@ -62,13 +62,17 @@ class StateTracker:
     - a face state must be seen for ``confirm_frames`` processed frames;
     - NO_USER is reported once nobody valid has been seen for
       ``no_user_delay`` seconds;
-    - only state *changes* are emitted;
+    - state *changes* are emitted; with ``update_interval`` > 0 the current face
+      state is also re-emitted at most every ``update_interval`` seconds while it
+      stays stable (the Presence Gate counts these owner updates);
     - a snapshot is requested once per entry into a threat state.
     """
 
     confirm_frames: int = 5
     no_user_delay: float = 1.5
     start_time: float = 0.0
+    update_interval: float = 0.0
+    last_emit_time: float = field(default=0.0)
     owner_streak: int = 0
     unknown_streak: int = 0
     last_state: str | None = None
@@ -109,7 +113,7 @@ class StateTracker:
             self.unknown_streak = 0
 
         streak = self.owner_streak if candidate == "OWNER_PRESENT" else self.unknown_streak
-        if streak < self.confirm_frames or candidate == self.last_state:
+        if streak < self.confirm_frames:
             return None
 
         best = obs.best_owner_score if obs.owners > 0 else obs.best_unknown_score
@@ -117,7 +121,15 @@ class StateTracker:
             f"STATE|{candidate}|faces={obs.faces}|owners={obs.owners}|unknown={obs.unknown}"
             f"|best={best:.4f}|ownerScore={max(obs.best_owner_score, 0.0):.4f}"
         )
+
+        if candidate == self.last_state:
+            if self.update_interval <= 0 or now - self.last_emit_time < self.update_interval:
+                return None
+            self.last_emit_time = now
+            return StateEvent(candidate, message, False)  # periodic update, never a new snapshot
+
         self.last_state = candidate
+        self.last_emit_time = now
 
         snapshot = False
         if candidate in THREAT_STATES:

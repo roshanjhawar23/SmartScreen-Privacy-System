@@ -118,12 +118,42 @@ async function anyProtectiveLayerOn(page){
   return false;
 }
 
-// Asserts that the given log prefixes all occur, in this order.
+// Asserts that the given log prefixes occur in this order: each one is matched after the
+// previous match (events may repeat, e.g. a second REVEALED after a recovery).
 function expectEventOrder(events, prefixes){
-  const order = prefixes.map((p) => indexOfEvent(events, p));
-  const missing = prefixes.filter((_, i) => order[i] < 0);
-  expect(missing, 'events missing from activity.log').toEqual([]);
-  expect([...order].sort((a, b) => a - b), `event order ${prefixes.join(' < ')}`).toEqual(order);
+  let from = -1;
+  const unmatched = [];
+  for(const prefix of prefixes){
+    const index = events.findIndex((e, i) => i > from && e.startsWith(prefix));
+    if(index < 0) unmatched.push(prefix);
+    else from = index;
+  }
+  expect(unmatched, `events missing or out of order (${prefixes.join(' < ')})`).toEqual([]);
+}
+
+// Presence Gate curtain state as rendered: which layer it uses and whether it is up.
+function curtainOn(page){
+  return page.evaluate(() => document.body.classList.contains('curtain-on'));
+}
+
+// Native confirmation dialogs can't be clicked by Playwright: auto-answer "Continue".
+async function autoConfirmDialogs(app){
+  await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response:1 }); });
+}
+
+// Simulate a Windows session event (lock-screen, unlock-screen, resume).
+async function emitPowerEvent(app, name){
+  await app.evaluate(({ powerMonitor }, event) => powerMonitor.emit(event), name);
+}
+
+// Milliseconds between the first log lines (with timestamps) matching two event prefixes.
+function msBetween(logFile, firstPrefix, secondPrefix){
+  const lines = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').split(/\r?\n/).filter(Boolean) : [];
+  const time = (prefix) => {
+    const line = lines.find((l) => l.replace(/^\S+ - /, '').startsWith(prefix));
+    return line ? Date.parse(line.split(' - ')[0]) : NaN;
+  };
+  return time(secondPrefix) - time(firstPrefix);
 }
 
 async function snap(page, testInfo, name){
@@ -136,5 +166,6 @@ async function snap(page, testInfo, name){
 
 module.exports = {
   REPO_DIR, PRIVATE_DIR, scenarioPath, mockScenarioPath, missingFixtures, launchApp, closeApp,
-  readEvents, waitForEvent, indexOfEvent, enableProtection, layerOpacity, anyProtectiveLayerOn, expectEventOrder, snap
+  readEvents, waitForEvent, indexOfEvent, enableProtection, layerOpacity, anyProtectiveLayerOn, expectEventOrder, snap,
+  curtainOn, autoConfirmDialogs, emitPowerEvent, msBetween
 };

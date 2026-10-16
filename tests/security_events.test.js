@@ -71,6 +71,20 @@ test('only unexpected backend exits are security events', () => {
   assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - AI_EXIT|code=null'), null);
 });
 
+test('presence gate events have readable titles', () => {
+  const title = (raw) => parseLogLine(`2026-10-01T10:00:00.000Z - ${raw}`)?.title ?? null;
+  assert.equal(title('PRESENCE_GATE|REVEALED|reason=owner-verified'), 'Screen revealed for owner');
+  assert.equal(title('PRESENCE_GATE|CONCEALED|reason=owner-absent'), 'Screen concealed — owner absent');
+  assert.equal(title('PRESENCE_GATE|CONCEALED|reason=threat-unknown_person'), 'Screen concealed — unrecognized person');
+  assert.equal(title('PRESENCE_GATE|CONCEALED|reason=protection-enabled'), 'Screen concealed — verifying owner');
+  assert.equal(title('PRESENCE_GATE|CONCEALED|reason=session-locked'), 'Screen concealed — session locked');
+  assert.equal(title('PRESENCE_GATE|FAILSAFE|reason=camera-error'), 'Screen protected — verification unavailable');
+  assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - PRESENCE_GATE|FAILSAFE|reason=camera-error').type, 'ERROR');
+  assert.equal(title('PRESENCE_GATE|DISABLED|reason=protection-disabled'), 'Protection disabled');
+  assert.equal(title('PRESENCE_GATE|VERIFYING|reason=owner-detected'), null);
+  assert.equal(title('PRESENCE_GATE|ABSENCE_GRACE|reason=no-user'), null);
+});
+
 test('log values cannot inject extra lines', () => {
   const line = formatLogLine('LOCK_REQUESTED|reason=x\n2026-01-01T00:00:00.000Z - AI_STATE|STATE|OWNER_PRESENT', new Date(0));
   assert.equal(line.split('\n').filter(Boolean).length, 1);
