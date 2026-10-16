@@ -664,17 +664,26 @@ ipcMain.on('start-ai',()=>{
     }
   }
 
-  const detectorModelPath = args[args.indexOf('--detector') + 1];
-  const recognizerModelPath = args[args.indexOf('--recognizer') + 1];
+  const detectorModelPath = path.join(modelsPath,'face_detection_yunet_2023mar.onnx');
+  const recognizerModelPath = path.join(modelsPath,'face_recognition_sface_2021dec.onnx');
   if(!fs.existsSync(detectorModelPath) || !fs.existsSync(recognizerModelPath)){
     reportAIFailure('AI_UNAVAILABLE','Face recognition models are missing.');
     return;
   }
 
+  // Self-test harness only: a scripted backend that speaks the same line protocol.
+  let spawnEnv = process.env;
+  if(TEST_MODE && process.env.SMARTSCREEN_MOCK_BACKEND){
+    runPath = process.execPath;
+    args = [path.join(__dirname,'..','tests','e2e','mock_backend.js'), path.resolve(process.env.SMARTSCREEN_MOCK_BACKEND)];
+    spawnEnv = { ...process.env, ELECTRON_RUN_AS_NODE:'1' };
+    writeLog(`TEST_MOCK_BACKEND|${path.basename(process.env.SMARTSCREEN_MOCK_BACKEND)}`);
+  }
+
   const logPath = path.join(app.getPath('userData'),'intruder_logs');
   fs.mkdirSync(logPath,{recursive:true});
 
-  const child = spawn(runPath,args,{stdio:['pipe','pipe','pipe'],windowsHide:true});
+  const child = spawn(runPath,args,{stdio:['pipe','pipe','pipe'],windowsHide:true,env:spawnEnv});
   pythonProcess=child;
   win.webContents.send('ai-starting');
 

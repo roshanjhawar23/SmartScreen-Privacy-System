@@ -11,6 +11,12 @@ const SCENARIO_DIR = path.join(PRIVATE_DIR, 'scenarios');
 const ARTIFACT_DIR = path.join(REPO_DIR, 'tests', 'e2e', 'artifacts');
 const OWNER_TEMPLATE = path.join(PRIVATE_DIR, 'owner_template.json');
 
+const MOCK_DIR = path.join(REPO_DIR, 'tests', 'e2e', 'scenarios');
+
+function mockScenarioPath(name){
+  return path.join(MOCK_DIR, `${name}.json`);
+}
+
 function scenarioPath(name){
   return path.join(SCENARIO_DIR, `${name}.mp4`);
 }
@@ -29,7 +35,9 @@ function loadOwnerEmbedding(useOwner){
   return Array.from({ length:128 }, (_, i) => (i === 0 ? 1 : 0));
 }
 
-async function launchApp({ scenario, cameraSource, ownerTemplate = true, settings } = {}){
+// mock: name of a tests/e2e/scenarios/*.json script replacing the Python backend.
+// scenario/cameraSource: recorded camera input for the real Python backend.
+async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, settings } = {}){
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'smartscreen-e2e-'));
   fs.writeFileSync(path.join(userData, 'device_profile.json'), JSON.stringify({
     version:1,
@@ -43,8 +51,9 @@ async function launchApp({ scenario, cameraSource, ownerTemplate = true, setting
     ...process.env,
     SMARTSCREEN_TEST:'1',
     SMARTSCREEN_USER_DATA:userData,
-    SMARTSCREEN_CAMERA_SOURCE:cameraSource || scenarioPath(scenario)
   };
+  if(mock) env.SMARTSCREEN_MOCK_BACKEND = mockScenarioPath(mock);
+  else env.SMARTSCREEN_CAMERA_SOURCE = cameraSource || scenarioPath(scenario);
   if(settings) env.SMARTSCREEN_TEST_SETTINGS = JSON.stringify(settings);
 
   const app = await electron.launch({ args:[REPO_DIR], cwd:REPO_DIR, env });
@@ -92,6 +101,24 @@ function layerOpacity(page, id){
   return page.evaluate((layerId) => document.getElementById(layerId).style.opacity || '0', id);
 }
 
+const PROTECTIVE_LAYERS = ['overlay', 'pixelateLayer', 'blackoutLayer', 'focusLayer'];
+
+// True when any layer that hides screen content is on.
+async function anyProtectiveLayerOn(page){
+  for(const id of PROTECTIVE_LAYERS){
+    if(await layerOpacity(page, id) === '1') return true;
+  }
+  return false;
+}
+
+// Asserts that the given log prefixes all occur, in this order.
+function expectEventOrder(events, prefixes){
+  const order = prefixes.map((p) => indexOfEvent(events, p));
+  const missing = prefixes.filter((_, i) => order[i] < 0);
+  expect(missing, 'events missing from activity.log').toEqual([]);
+  expect([...order].sort((a, b) => a - b), `event order ${prefixes.join(' < ')}`).toEqual(order);
+}
+
 async function snap(page, testInfo, name){
   fs.mkdirSync(ARTIFACT_DIR, { recursive:true });
   const slug = testInfo.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
@@ -101,6 +128,6 @@ async function snap(page, testInfo, name){
 }
 
 module.exports = {
-  REPO_DIR, PRIVATE_DIR, scenarioPath, missingFixtures, launchApp, closeApp,
-  readEvents, waitForEvent, indexOfEvent, enableProtection, layerOpacity, snap
+  REPO_DIR, PRIVATE_DIR, scenarioPath, mockScenarioPath, missingFixtures, launchApp, closeApp,
+  readEvents, waitForEvent, indexOfEvent, enableProtection, layerOpacity, anyProtectiveLayerOn, expectEventOrder, snap
 };

@@ -17,3 +17,7 @@ Goal: test the real app without the owner present, so each phase can be verified
 - e2e: empty room → walk-away → simulated lock → camera error; missing source; owner verified;
   camera stop; walk-away return/lock; unknown threat lock; owner+unknown; threat recovery;
   fail-closed after camera error (expected failure until Phase 1.5).
+
+## Revision (owner decision, 2026-10-16)
+No webcam fixtures before Phase 5. Added a scripted mock backend (`SMARTSCREEN_MOCK_BACKEND`) used by all
+protection e2e tests; video face-recognition tests are pending ("needs owner fixture").

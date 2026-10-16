@@ -1,5 +1,7 @@
-// Identity scenarios on recorded private fixtures (owner, unknown, empty).
-// Build them with tests/fixtures/tools (see docs/testing/self-test-harness.md).
+// Face recognition from recorded video: the real Python backend (YuNet + SFace)
+// on private fixtures (owner, unknown, empty). PENDING until the owner fixture is
+// recorded (planned before Phase 5); protection rules are covered by protection.spec.js
+// with the mock backend. Build fixtures with tests/fixtures/tools (docs/testing/self-test-harness.md).
 const { test, expect } = require('@playwright/test');
 const h = require('./helpers/app');
 
@@ -8,18 +10,12 @@ test.afterEach(async () => { await h.closeApp(ctx); ctx = null; });
 
 function requireFixtures(options){
   const reason = h.missingFixtures(options);
-  test.skip(Boolean(reason), reason);
+  test.skip(Boolean(reason), `pending: needs owner fixture — ${reason}`);
 }
 
-const PROTECTIVE_LAYERS = ['overlay', 'pixelateLayer', 'blackoutLayer', 'focusLayer'];
-async function anyProtectiveLayerOn(page){
-  for(const id of PROTECTIVE_LAYERS){
-    if(await h.layerOpacity(page, id) === '1') return true;
-  }
-  return false;
-}
+const anyProtectiveLayerOn = h.anyProtectiveLayerOn;
 
-test('owner is verified and the screen stays clear', async ({}, testInfo) => {
+test('video: owner is verified and the screen stays clear', async ({}, testInfo) => {
   requireFixtures({ scenario:'owner_then_stop' });
   ctx = await h.launchApp({ scenario:'owner_then_stop' });
   const { page, logFile } = ctx;
@@ -35,7 +31,7 @@ test('owner is verified and the screen stays clear', async ({}, testInfo) => {
   expect(events.some((e) => e.startsWith('PHOTO_SAVED|'))).toBe(false);
 });
 
-test('camera stops while the owner is present: Camera unavailable', async ({}, testInfo) => {
+test('video: camera stops while the owner is present: Camera unavailable', async ({}, testInfo) => {
   requireFixtures({ scenario:'owner_then_stop' });
   ctx = await h.launchApp({ scenario:'owner_then_stop' });
   const { page, logFile } = ctx;
@@ -48,22 +44,7 @@ test('camera stops while the owner is present: Camera unavailable', async ({}, t
   await h.snap(page, testInfo, 'camera-stopped');
 });
 
-// Fail-closed rule (CLAUDE.md #2). KNOWN DEFECT until Phase 1.5 (Presence Gate):
-// a camera failure removes protection. test.fail() marks the expected failure;
-// it turns red ("unexpectedly passed") once fixed, and the marker must then go.
-test('FAIL-CLOSED: a camera failure keeps the screen concealed', async ({}, testInfo) => {
-  test.fail(true, 'Known Phase 0 defect: monitor failure reveals the screen (fixed in Phase 1.5).');
-  requireFixtures({ scenario:'empty_only', ownerTemplate:false });
-  ctx = await h.launchApp({ scenario:'empty_only', ownerTemplate:false });
-  const { page, logFile } = ctx;
-  await h.enableProtection(page);
-  await h.waitForEvent(logFile, 'AI_ERROR|CAMERA_ERROR|', 40000);
-  await page.waitForTimeout(1000);
-  await h.snap(page, testInfo, 'after-camera-error');
-  expect(await anyProtectiveLayerOn(page)).toBe(true);
-});
-
-test('walk-away: owner returns before the deadline, sequence cancelled, no lock', async ({}, testInfo) => {
+test('video: walk-away: owner returns before the deadline, sequence cancelled, no lock', async ({}, testInfo) => {
   requireFixtures({ scenario:'walkaway_return' });
   ctx = await h.launchApp({ scenario:'walkaway_return' });
   const { page, logFile } = ctx;
@@ -87,7 +68,7 @@ test('walk-away: owner returns before the deadline, sequence cancelled, no lock'
   expect(events.some((e) => e.startsWith('LOCK_REQUESTED'))).toBe(false);
 });
 
-test('walk-away: owner stays away, screen locks (simulated)', async ({}, testInfo) => {
+test('video: walk-away: owner stays away, screen locks (simulated)', async ({}, testInfo) => {
   requireFixtures({ scenario:'walkaway_lock' });
   ctx = await h.launchApp({ scenario:'walkaway_lock' });
   const { page, logFile } = ctx;
@@ -103,7 +84,7 @@ test('walk-away: owner stays away, screen locks (simulated)', async ({}, testInf
   expect([...order].sort((a, b) => a - b)).toEqual(order);
 });
 
-test('unknown person: threat detected, evidence saved, screen locks (simulated)', async ({}, testInfo) => {
+test('video: unknown person: threat detected, evidence saved, screen locks (simulated)', async ({}, testInfo) => {
   requireFixtures({ scenario:'threat_lock' });
   ctx = await h.launchApp({ scenario:'threat_lock' });
   const { page, logFile } = ctx;
@@ -125,7 +106,7 @@ test('unknown person: threat detected, evidence saved, screen locks (simulated)'
   expect(h.indexOfEvent(events, 'LOCK_REQUESTED|reason=privacy-threat')).toBeGreaterThan(h.indexOfEvent(events, 'THREAT_FOCUS_ACTIVATED'));
 });
 
-test('owner with an unknown person beside them is a threat', async ({}, testInfo) => {
+test('video: owner with an unknown person beside them is a threat', async ({}, testInfo) => {
   requireFixtures({ scenario:'owner_and_unknown' });
   ctx = await h.launchApp({ scenario:'owner_and_unknown' });
   const { page, logFile } = ctx;
@@ -137,7 +118,7 @@ test('owner with an unknown person beside them is a threat', async ({}, testInfo
   await h.waitForEvent(logFile, 'TEST_LOCK_SIMULATED|reason=privacy-threat', 15000);
 });
 
-test('threat recovery: unknown leaves, owner verified again', async ({}, testInfo) => {
+test('video: threat recovery: unknown leaves, owner verified again', async ({}, testInfo) => {
   requireFixtures({ scenario:'threat_recovery' });
   ctx = await h.launchApp({ scenario:'threat_recovery' });
   const { page, logFile } = ctx;

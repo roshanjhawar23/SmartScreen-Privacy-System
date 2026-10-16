@@ -1,0 +1,5 @@
+{ "heartbeatMs": 2000, "steps": [
+  { "at": 0, "emit": "AI_READY" },
+  { "at": 400, "state": "OWNER_PRESENT" },
+  { "at": 2500, "state": "UNKNOWN_PERSON", "snapshot": true }
+] }

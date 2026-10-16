@@ -12,6 +12,30 @@ Everything below is ignored unless `SMARTSCREEN_TEST=1` is set. Real mode is unc
 | `SMARTSCREEN_USER_DATA` | Isolated userData folder (profile, encrypted template, logs). |
 | `SMARTSCREEN_CAMERA_SOURCE` | Video file or image folder used instead of the webcam (`cameraSource` config). |
 | `SMARTSCREEN_TEST_SETTINGS` | JSON merged over `config/settings.json`. |
+| `SMARTSCREEN_MOCK_BACKEND` | Scenario JSON; Electron spawns `tests/e2e/mock_backend.js` instead of `face_detection.py`. |
+
+## Mock backend (default for e2e)
+
+`tests/e2e/mock_backend.js` runs under Electron's own Node (`ELECTRON_RUN_AS_NODE=1`) and speaks
+the real line protocol: it reads the JSON config line, honours `STOP`/EOF, emits `AI_HEARTBEAT`
+every `heartbeatMs`, and plays the scenario's timed steps:
+
+```json
+{ "heartbeatMs": 2000, "steps": [
+  { "at": 0,    "emit": "AI_READY" },
+  { "at": 400,  "state": "OWNER_PRESENT" },
+  { "at": 2500, "state": "UNKNOWN_PERSON", "snapshot": true },
+  { "at": 4000, "heartbeat": false },
+  { "at": 6000, "emit": "AI_ERROR|CAMERA_ERROR|The camera stopped delivering frames." },
+  { "at": 6050, "exit": 1 }
+] }
+```
+
+`state` steps are formatted exactly like the Python backend (`STATE|...|faces=|owners=|unknown=|best=|ownerScore=`);
+`snapshot` adds a `PHOTO_SAVED|` line. Scenarios live in `tests/e2e/scenarios/` and are validated by
+`tests/mock_backend.test.js`. The mock tests the protection logic (main + renderer); it does **not**
+test face recognition. That is covered only by `video_recognition.spec.js`, which is pending until the
+owner fixture is recorded (planned before Phase 5).
 
 - **Camera source** (`backend/camera_source.py`): frames are delivered at real-time pace
   (late frames dropped, like a live camera). When the file ends every read fails, so the
@@ -22,7 +46,10 @@ Everything below is ignored unless `SMARTSCREEN_TEST=1` is set. Real mode is unc
   `TEST_LOCK_SIMULATED|reason=...` and runs nothing. In real mode it runs
   `LockWorkStation` as before (`tests/screen_lock.test.js` proves both).
 
-## Private fixtures (`tests/fixtures/private/`, gitignored, never commit)
+## Private fixtures (`tests/fixtures/private/`, gitignored, never commit) — pending
+
+Not recorded yet, by decision of the owner: no webcam recording before Phase 5.
+Only the synthetic `empty.mp4` exists (used by `harness.spec.js` to test the camera-source path).
 
 | File | How |
 |---|---|
