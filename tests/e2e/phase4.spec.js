@@ -5,7 +5,7 @@ const path = require('path');
 const h = require('./helpers/app');
 
 let ctx;
-test.afterEach(async () => { await h.closeApp(ctx); ctx = null; });
+test.afterEach(async ({}, testInfo) => { h.keepLogOnFailure(ctx, testInfo); await h.closeApp(ctx); ctx = null; });
 
 const events = () => h.readEvents(ctx.logFile);
 const message = () => ctx.page.locator('#manageMessage');
@@ -229,4 +229,28 @@ test('settings transfer: export, then import on a fresh profile; wrong passphras
   expect(fs.existsSync(path.join(ctx.userData, 'biometric', 'trusted'))).toBe(true); // own people untouched
   await h.snap(page, testInfo, 'imported');
   fs.rmSync(file, { force:true });
+});
+
+test('deleting the active custom profile switches with full effects (log, curtain)', async () => {
+  ctx = await h.launchApp({ mock:'unknown_only', profiles:{ version:1, custom:{ Cafe:{ curtainEffect:'pixelate', sensitivity:'strict', walkAwayLockDelay:4000, glancingCounts:true } }, rules:[], autoSwitch:false } });
+  const { page, logFile } = ctx;
+  await page.locator('#profileSelect').selectOption('Cafe');
+  await h.enableProtection(page);
+  await h.waitForEvent(logFile, 'PRESENCE_GATE|CONCEALED');
+  await expect.poll(() => h.layerOpacity(page, 'pixelateLayer')).toBe('1');
+
+  await openManage(page);
+  await page.locator('#deleteProfileBtn').click();
+  await h.waitForEvent(logFile, 'PROFILE_CHANGED|profile=Office|source=profile-deleted');
+  await expect(page.locator('#profileSelect')).toHaveValue('Office');
+  // the curtain follows the new profile at once (Office = blackout)
+  await expect.poll(() => h.layerOpacity(page, 'blackoutLayer')).toBe('1');
+  await expect.poll(() => h.layerOpacity(page, 'pixelateLayer')).toBe('0');
+  expect(JSON.parse(fs.readFileSync(path.join(ctx.userData, 'policy_state.json'), 'utf8')).activeProfile).toBe('Office');
+});
+
+test('the old enrollment shortcut that bypassed trusted-people checks is gone', async () => {
+  ctx = await h.launchApp({ mock:'owner_present' });
+  expect(await ctx.page.evaluate(() => typeof window.electronAPI.openEnrollment)).toBe('undefined');
+  expect(await ctx.app.evaluate(({ ipcMain }) => ipcMain._invokeHandlers?.has?.('open-enrollment') ?? null)).not.toBe(true);
 });

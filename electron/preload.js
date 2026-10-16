@@ -65,7 +65,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   confirmProtectedAction:(options)=>ipcRenderer.invoke('confirm-protected-action',options),
   getBiometricStatus:()=>ipcRenderer.invoke('get-biometric-status'),
-  openEnrollment:()=>ipcRenderer.invoke('open-enrollment'),
   onBiometricUpdated:(cb)=>ipcRenderer.on('biometric-updated',cb),
 
   lockScreen:(reason)=>ipcRenderer.send('lock-screen',reason),

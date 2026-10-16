@@ -5,7 +5,7 @@ const h = require('./helpers/app');
 const OUTLOOK = { process:'C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE', title:'Inbox - SECRET-SUBJECT-TEXT - Outlook' };
 
 let ctx;
-test.afterEach(async () => { await h.closeApp(ctx); ctx = null; });
+test.afterEach(async ({}, testInfo) => { h.keepLogOnFailure(ctx, testInfo); await h.closeApp(ctx); ctx = null; });
 
 async function start(mock, options = {}){
   ctx = await h.launchApp({ mock, ...options });

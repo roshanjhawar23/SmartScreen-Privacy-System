@@ -4,7 +4,7 @@ const path = require('path');
 const h = require('./helpers/app');
 
 let ctx;
-test.afterEach(async () => { await h.closeApp(ctx); ctx = null; });
+test.afterEach(async ({}, testInfo) => { h.keepLogOnFailure(ctx, testInfo); await h.closeApp(ctx); ctx = null; });
 
 test('empty room: walk-away escalates to a simulated lock, then the ended source is a camera error', async ({}, testInfo) => {
   const reason = h.missingFixtures({ scenario:'empty_only', ownerTemplate:false });

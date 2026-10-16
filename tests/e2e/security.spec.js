@@ -5,7 +5,7 @@ const path = require('path');
 const h = require('./helpers/app');
 
 let ctx;
-test.afterEach(async () => { await h.closeApp(ctx); ctx = null; });
+test.afterEach(async ({}, testInfo) => { h.keepLogOnFailure(ctx, testInfo); await h.closeApp(ctx); ctx = null; });
 
 async function start(mock, options = {}){
   ctx = await h.launchApp({ mock, ...options });

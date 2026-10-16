@@ -122,6 +122,17 @@ function setActiveApp(ctx, app){
   fs.writeFileSync(ctx.activeAppFile, JSON.stringify(app));
 }
 
+// Keep the app's activity.log of a failed test (the temporary profile is deleted afterwards).
+function keepLogOnFailure(ctx, testInfo){
+  if(!ctx || !testInfo || testInfo.status === testInfo.expectedStatus) return;
+  try{
+    const dir = path.join(ARTIFACT_DIR, 'logs');
+    fs.mkdirSync(dir, { recursive:true });
+    const slug = testInfo.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 80);
+    fs.copyFileSync(ctx.logFile, path.join(dir, `${slug}--${Date.now()}.log`));
+  }catch{}
+}
+
 // A hung quit fails the test loudly (instead of stalling the suite) and is killed so it
 // cannot affect later tests.
 const QUIT_TIMEOUT_MS = 20000;
@@ -230,5 +241,5 @@ async function snap(page, testInfo, name){
 module.exports = {
   REPO_DIR, PRIVATE_DIR, scenarioPath, mockScenarioPath, missingFixtures, launchApp, closeApp,
   readEvents, waitForEvent, indexOfEvent, enableProtection, layerOpacity, anyProtectiveLayerOn, expectEventOrder, snap,
-  curtainOn, autoConfirmDialogs, emitPowerEvent, msBetween, setActiveApp, setWifi, seedTrustedPerson
+  curtainOn, autoConfirmDialogs, emitPowerEvent, msBetween, setActiveApp, setWifi, seedTrustedPerson, keepLogOnFailure
 };

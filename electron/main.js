@@ -140,7 +140,13 @@ function rebuildPolicies(){
   const names = enterprise.allowedProfileNames(enterprisePolicy, Object.keys(merged.profiles));
   const profiles = Object.fromEntries(names.map((n) => [n, merged.profiles[n]]));
   policies = { ...merged, profiles, defaultProfile:names.includes(merged.defaultProfile) ? merged.defaultProfile : names[0] };
-  if(activeProfile && !policies.profiles[activeProfile]) activeProfile = policies.defaultProfile;
+}
+
+// After profiles changed (delete, import): if the active one is gone, switch with the full
+// effects (log, saved choice, curtain refresh, tray, renderer), never silently.
+function ensureActiveProfileExists(source){
+  if(policies.profiles[activeProfile]) return;
+  setActiveProfile(policies.defaultProfile, source);
 }
 
 function loadPolicies(){
@@ -182,7 +188,7 @@ function effectiveSettings(){
 function setActiveProfile(name, source){
   const next = resolveProfileName(policies, name);
   if(next !== name) return false;
-  if(next === activeProfile && source !== 'import') return true;
+  if(next === activeProfile && policies.profiles[activeProfile] && source !== 'import') return true;
   activeProfile = next;
   try{ fs.writeFileSync(policyStateFile(), JSON.stringify({ activeProfile:next })); }catch(err){ writeLog(`POLICY_STATE_SAVE_ERROR|${err.message}`); }
   writeLog(`PROFILE_CHANGED|profile=${next}|source=${source}`);
@@ -654,6 +660,7 @@ function createEnrollmentWindow(){
   enrollmentWindow.loadFile(path.join(__dirname,'..','frontend','enroll.html'));
   enrollmentWindow.on('closed',()=>{
     enrollmentWindow=null;
+    pendingEnrollment=null;
     if(!win && isConfigured(app.getPath('userData'))){
       app.quit();
     }
@@ -715,7 +722,13 @@ async function finishEnrollment(result){
   }
 
   ensureTrustedPeople();
-  const target = pendingEnrollment || { mode:'add', name:trustedStore().count() === 0 ? 'Owner' : 'Trusted person' };
+  const firstPerson = trustedStore().count() === 0;
+  if(!firstPerson){
+    const blocked = trustedPeopleChangeAllowed();
+    if(blocked) throw new Error(blocked);
+    if(!pendingEnrollment) throw new Error('Choose "Add person" or "Re-enroll" in Manage first.');
+  }
+  const target = pendingEnrollment || { mode:'add', name:'Owner' };
   pendingEnrollment = null;
   if(target.mode === 'reenroll') trustedStore().reenroll(target.id, { embedding:result.embedding, sampleCount:result.sampleCount });
   else trustedStore().add({ name:target.name, embedding:result.embedding, sampleCount:result.sampleCount });
@@ -894,24 +907,6 @@ ipcMain.handle('remove-trusted-person',async(_event, id)=>{
     writeLog('TRUSTED_PERSON_REMOVED');
     return { ok:true, ...trustedPeopleView() };
   }catch(error){ return { ok:false, error:error.message }; }
-});
-
-ipcMain.handle('open-enrollment',async()=>{
-  const profile = readProfile(app.getPath('userData'));
-  if(profile?.biometric?.enrolled){
-    const confirmed = await dialog.showMessageBox(win && !win.isDestroyed() ? win : enrollmentWindow, {
-      type:'warning',
-      buttons:['Cancel','Continue'],
-      defaultId:0,
-      cancelId:0,
-      noLink:true,
-      title:'Change registered identity',
-      message:'This will replace the biometric template currently used to recognize the owner.'
-    });
-    if(confirmed.response !== 1) return {ok:false,cancelled:true};
-  }
-  createEnrollmentWindow();
-  return {ok:true};
 });
 
 ipcMain.handle('enrollment-submit',async(_event,samples)=>{
@@ -1315,7 +1310,7 @@ ipcMain.handle('delete-profile',(_event, name)=>{
   try{
     saveUserProfiles(profileStore.deleteCustom(userProfiles, name));
     writeLog(`PROFILE_DELETED|profile=${name}`);
-    if(!policies.profiles[activeProfile] || activeProfile === name) setActiveProfile(policies.defaultProfile, 'panel');
+    ensureActiveProfileExists('profile-deleted');
     rebuildTrayMenu();
     return { ok:true, ...profileInfo() };
   }catch(error){ return { ok:false, error:error.message }; }
@@ -1324,11 +1319,13 @@ ipcMain.handle('delete-profile',(_event, name)=>{
 ipcMain.handle('set-auto-switch',async(_event, enabled)=>{
   const blocked = profilesLocked();
   if(blocked) return { ok:false, error:blocked };
-  saveUserProfiles({ ...userProfiles, autoSwitch:enabled === true });
-  writeLog(`PROFILE_AUTO_SWITCH|enabled=${enabled === true}`);
-  autoSwitcher.reset();
-  if(enabled === true) await autoSwitcher.evaluate();
-  return { ok:true, ...profileInfo() };
+  try{
+    saveUserProfiles({ ...userProfiles, autoSwitch:enabled === true });
+    writeLog(`PROFILE_AUTO_SWITCH|enabled=${enabled === true}`);
+    autoSwitcher.reset();
+    if(enabled === true) await autoSwitcher.evaluate();
+    return { ok:true, ...profileInfo() };
+  }catch(error){ return { ok:false, error:error.message }; }
 });
 
 ipcMain.handle('add-wifi-rule',async()=>{
@@ -1336,19 +1333,23 @@ ipcMain.handle('add-wifi-rule',async()=>{
   if(blocked) return { ok:false, error:blocked };
   const ssid = await currentSsid();
   if(!ssid) return { ok:false, error:'Not connected to a Wi-Fi network.' };
-  const rules = userProfiles.rules.filter((r) => !(r.type === 'wifi' && r.ssid === ssid));
-  rules.unshift({ id:`wifi-${crypto.randomBytes(4).toString('hex')}`, type:'wifi', profile:activeProfile, ssid });
-  saveUserProfiles({ ...userProfiles, rules });
-  writeLog(`PROFILE_RULE_ADDED|type=wifi|profile=${activeProfile}`);
-  return { ok:true, ...profileInfo() };
+  try{
+    const rules = userProfiles.rules.filter((r) => !(r.type === 'wifi' && r.ssid === ssid));
+    rules.unshift({ id:`wifi-${crypto.randomBytes(4).toString('hex')}`, type:'wifi', profile:activeProfile, ssid });
+    saveUserProfiles({ ...userProfiles, rules });
+    writeLog(`PROFILE_RULE_ADDED|type=wifi|profile=${activeProfile}`);
+    return { ok:true, ...profileInfo() };
+  }catch(error){ return { ok:false, error:error.message }; }
 });
 
 ipcMain.handle('remove-rule',(_event, id)=>{
   const blocked = profilesLocked();
   if(blocked) return { ok:false, error:blocked };
-  saveUserProfiles({ ...userProfiles, rules:userProfiles.rules.filter((r) => r.id !== id) });
-  writeLog('PROFILE_RULE_REMOVED');
-  return { ok:true, ...profileInfo() };
+  try{
+    saveUserProfiles({ ...userProfiles, rules:userProfiles.rules.filter((r) => r.id !== id) });
+    writeLog('PROFILE_RULE_REMOVED');
+    return { ok:true, ...profileInfo() };
+  }catch(error){ return { ok:false, error:error.message }; }
 });
 
 // Encrypted settings transfer: preferences only, never biometric data.
@@ -1388,6 +1389,7 @@ ipcMain.handle('import-settings',async(_event, passphrase)=>{
       });
     }
     if(imported.activeProfile && policies.profiles[imported.activeProfile]) setActiveProfile(imported.activeProfile, 'import');
+    ensureActiveProfileExists('import');
     if(typeof imported.presenceGateEnabled === 'boolean' && !(enterprisePolicy.presenceGateRequired && !imported.presenceGateEnabled)){
       presenceGate.setEnabled(imported.presenceGateEnabled);
     }

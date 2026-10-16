@@ -3,7 +3,7 @@ const { test, expect } = require('@playwright/test');
 const h = require('./helpers/app');
 
 let ctx;
-test.afterEach(async () => { await h.closeApp(ctx); ctx = null; });
+test.afterEach(async ({}, testInfo) => { h.keepLogOnFailure(ctx, testInfo); await h.closeApp(ctx); ctx = null; });
 
 const style = (page, id, prop) => page.evaluate(([i, p]) => document.getElementById(i).style[p], [id, prop]);
 
