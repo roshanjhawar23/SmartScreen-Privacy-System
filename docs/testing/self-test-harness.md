@@ -79,8 +79,8 @@ e2e notes:
   a phase is not tagged while any scenario it relies on is skipped.
 - Screenshots: `tests/e2e/artifacts/*.png` (gitignored). The window is transparent, so the desktop
   behind it is not in the screenshot; layer state is asserted from the DOM.
-- `test.fail()` marks a known defect (currently: fail-open on camera error, fixed in Phase 1.5).
-  It reports as passed while the defect exists and turns red once fixed, so the marker must be removed.
+- `test.fail()` marks a known defect: it reports as passed while the defect exists and turns red once
+  fixed, so the marker must then be removed. None are in use (the Phase 0 fail-open was fixed in Phase 1.5).
 
 ## What the harness cannot prove
 
