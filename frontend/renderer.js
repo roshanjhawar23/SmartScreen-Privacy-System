@@ -988,7 +988,7 @@ window.electronAPI.onPolicyRefused((data) => {
 window.electronAPI.onBiometricUpdated(() => {
   refreshBiometricStatus();
   refreshSecurityEvents();
-  if (managePanel && !managePanel.hidden) refreshManage();
+  if (managePanel && !managePanel.hidden) { showManageMessage('Enrollment saved.'); refreshManage(); }
 });
 
 // Startup — runs exactly once.
