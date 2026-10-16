@@ -157,7 +157,10 @@ test('rule 7: session lock and unlock re-conceal; reveal again needs verificatio
   expect(locked).toBeGreaterThanOrEqual(0);
   expect(verifyingAgain).toBeGreaterThan(locked);
   expect(revealedAgain).toBeGreaterThan(verifyingAgain);
-  expect(events().some((e) => /unlock|LOGON|AUTH/i.test(e) && !e.startsWith('PRESENCE_GATE'))).toBe(false);
+  // SmartScreen only observes the unlock (SESSION_UNLOCKED); it never performs one.
+  expect(events()).toEqual(expect.arrayContaining(['SESSION_LOCKED', 'SESSION_UNLOCKED']));
+  const observations = /^(PRESENCE_GATE\||SESSION_(UN)?LOCKED$)/;
+  expect(events().some((e) => /unlock|LOGON|AUTH/i.test(e) && !observations.test(e))).toBe(false);
   await h.snap(page, testInfo, 're-revealed');
 });
 
