@@ -5,6 +5,11 @@
 // Uses the documented IVirtualDesktopManager COM interface through koffi (FFI).
 // MoveWindowToDesktop only works for windows owned by the calling process, which our
 // overlays are. Every call fails soft: on any error `available` is false and nothing moves.
+//
+// The API has no "current desktop" query. The caller supplies the current desktop's ID,
+// read from a freshly shown probe window (new windows open on the current desktop). The
+// foreground window's desktop is only a fallback: on an empty desktop the foreground is the
+// shell, which belongs to no desktop (live check 2026-10-16: the overlay did not follow).
 
 const CLSID_VirtualDesktopManager = 'AA509086-5CA9-4C25-8F95-589D3C07B48A';
 const IID_IVirtualDesktopManager = 'A5CD92FF-29BE-454C-8D04-D82879FB3F1B';
@@ -61,7 +66,16 @@ function createVirtualDesktops({ platform = process.platform, loadKoffi = () => 
         const status = isOnCurrent(manager, handleToNumber(handle), result);
         return status < 0 ? true : result[0] !== 0; // unknown → assume visible, don't thrash
       },
-      // Moves our window to the desktop of the current foreground window.
+      // Desktop GUID (16 bytes) of a window, or null (shell windows have none).
+      desktopIdOf(handle){
+        const desktop = Buffer.alloc(16);
+        if(getDesktopId(manager, handleToNumber(handle), desktop) < 0 || desktop.equals(Buffer.alloc(16))) return null;
+        return desktop;
+      },
+      moveToDesktop(handle, desktopId){
+        return Boolean(desktopId) && moveToDesktop(manager, handleToNumber(handle), desktopId) >= 0;
+      },
+      // Fallback: the desktop of the current foreground window.
       moveToCurrentDesktop(handle){
         const foreground = GetForegroundWindow();
         if(!foreground) return false;
@@ -75,15 +89,28 @@ function createVirtualDesktops({ platform = process.platform, loadKoffi = () => 
   }
 }
 
-// One polling step: move any overlay that is not on the current desktop. Returns moves made.
-function followCurrentDesktop(windows, desktops, log = () => {}){
+// One polling step: move every overlay that is not on the current desktop.
+// currentDesktopId: async () => 16-byte desktop ID or null (see the header comment).
+async function followCurrentDesktop(windows, desktops, log = () => {}, currentDesktopId = async () => null){
   if(!desktops.available) return 0;
+  let off;
+  try{
+    off = windows.filter((w) => !w.isDestroyed() && !desktops.isOnCurrentDesktop(w.getNativeWindowHandle()));
+  }catch(error){
+    log(`OVERLAY_DESKTOP_FOLLOW_ERROR|${error.message}`);
+    return 0;
+  }
+  if(off.length === 0) return 0;
+
+  let target = null;
+  try{ target = await currentDesktopId(); }catch(error){ log(`OVERLAY_DESKTOP_FOLLOW_ERROR|probe: ${error.message}`); }
   let moved = 0;
-  for(const win of windows){
+  for(const win of off){
     try{
-      if(win.isDestroyed() || desktops.isOnCurrentDesktop(win.getNativeWindowHandle())) continue;
-      const ok = desktops.moveToCurrentDesktop(win.getNativeWindowHandle());
-      log(`OVERLAY_DESKTOP_FOLLOW|moved=${ok}`);
+      if(win.isDestroyed()) continue;
+      const handle = win.getNativeWindowHandle();
+      const ok = target ? desktops.moveToDesktop(handle, target) : desktops.moveToCurrentDesktop(handle);
+      log(`OVERLAY_DESKTOP_FOLLOW|moved=${ok}|via=${target ? 'probe' : 'foreground'}`);
       if(ok) moved++;
     }catch(error){
       log(`OVERLAY_DESKTOP_FOLLOW_ERROR|${error.message}`);

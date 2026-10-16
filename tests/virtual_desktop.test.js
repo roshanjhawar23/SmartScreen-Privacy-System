@@ -25,25 +25,48 @@ function fakeWindow(id, { destroyed = false } = {}){
   return { isDestroyed:() => destroyed, getNativeWindowHandle:() => h };
 }
 
-test('follow moves only overlays that left the current desktop', () => {
-  const onCurrent = new Set([1n]);
+function fakeDesktops(onCurrent){
   const moves = [];
-  const logs = [];
-  const desktops = {
+  return {
+    moves,
     available:true,
     isOnCurrentDesktop:(h) => onCurrent.has(handleToNumber(h)),
-    moveToCurrentDesktop:(h) => { moves.push(handleToNumber(h)); return true; }
+    moveToDesktop:(h, id) => { moves.push([handleToNumber(h), id.toString('hex')]); return true; },
+    moveToCurrentDesktop:(h) => { moves.push([handleToNumber(h), 'foreground']); return false; }
   };
-  const moved = followCurrentDesktop([fakeWindow(1), fakeWindow(2), fakeWindow(3, { destroyed:true })], desktops, (l) => logs.push(l));
+}
+
+test('follow moves overlays that left the desktop to the probed current desktop', async () => {
+  const desktops = fakeDesktops(new Set([1n]));
+  const logs = [];
+  let probes = 0;
+  const current = Buffer.alloc(16, 7);
+  const moved = await followCurrentDesktop([fakeWindow(1), fakeWindow(2), fakeWindow(3, { destroyed:true })], desktops,
+    (l) => logs.push(l), async () => { probes++; return current; });
   assert.equal(moved, 1);
-  assert.deepEqual(moves, [2n]);
-  assert.deepEqual(logs, ['OVERLAY_DESKTOP_FOLLOW|moved=true']);
+  assert.equal(probes, 1);
+  assert.deepEqual(desktops.moves, [[2n, current.toString('hex')]]);
+  assert.deepEqual(logs, ['OVERLAY_DESKTOP_FOLLOW|moved=true|via=probe']);
 });
 
-test('follow survives API errors and does nothing when unavailable', () => {
+test('no probe when every overlay is already on the current desktop', async () => {
+  let probes = 0;
+  assert.equal(await followCurrentDesktop([fakeWindow(1)], fakeDesktops(new Set([1n])), () => {}, async () => { probes++; }), 0);
+  assert.equal(probes, 0);
+});
+
+test('probe failure falls back to the foreground desktop and is logged', async () => {
+  const desktops = fakeDesktops(new Set());
   const logs = [];
-  const throwing = { available:true, isOnCurrentDesktop:() => { throw new Error('boom'); }, moveToCurrentDesktop:() => true };
-  assert.equal(followCurrentDesktop([fakeWindow(1)], throwing, (l) => logs.push(l)), 0);
+  await followCurrentDesktop([fakeWindow(2)], desktops, (l) => logs.push(l), async () => { throw new Error('no window'); });
+  assert.deepEqual(desktops.moves, [[2n, 'foreground']]);
+  assert.deepEqual(logs, ['OVERLAY_DESKTOP_FOLLOW_ERROR|probe: no window', 'OVERLAY_DESKTOP_FOLLOW|moved=false|via=foreground']);
+});
+
+test('follow survives API errors and does nothing when unavailable', async () => {
+  const logs = [];
+  const throwing = { available:true, isOnCurrentDesktop:() => { throw new Error('boom'); } };
+  assert.equal(await followCurrentDesktop([fakeWindow(1)], throwing, (l) => logs.push(l)), 0);
   assert.deepEqual(logs, ['OVERLAY_DESKTOP_FOLLOW_ERROR|boom']);
-  assert.equal(followCurrentDesktop([fakeWindow(1)], { available:false }), 0);
+  assert.equal(await followCurrentDesktop([fakeWindow(1)], { available:false }), 0);
 });

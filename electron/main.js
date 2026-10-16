@@ -386,12 +386,38 @@ function syncOverlayWindows(){
 // Keep every overlay on the virtual desktop the user is looking at (Windows only).
 let virtualDesktops = null;
 let lastDesktopLog = '';
-function followVirtualDesktops(){
-  if(!virtualDesktops) return;
-  followCurrentDesktop(allOverlayWindows(), virtualDesktops, (line)=>{
-    if(line !== lastDesktopLog) writeLog(line);
-    lastDesktopLog = line;
+let followingDesktop = false;
+
+// A freshly shown window opens on the current virtual desktop: read its desktop ID.
+// Measured on Windows 11: tool windows (skipTaskbar) and non-focusable windows get no
+// desktop assignment, so the probe is an ordinary 1×1 transparent window, shown with
+// showInactive() (no focus change) and destroyed right after.
+async function probeCurrentDesktopId(){
+  const primary = screen.getPrimaryDisplay().bounds;
+  const probe = new BrowserWindow({
+    x:primary.x, y:primary.y, width:1, height:1, show:false, frame:false, transparent:true,
+    opacity:0, resizable:false, hasShadow:false
   });
+  try{
+    probe.showInactive();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return virtualDesktops.desktopIdOf(probe.getNativeWindowHandle());
+  }finally{
+    probe.destroy();
+  }
+}
+
+async function followVirtualDesktops(){
+  if(!virtualDesktops || followingDesktop) return;
+  followingDesktop = true;
+  try{
+    await followCurrentDesktop(allOverlayWindows(), virtualDesktops, (line)=>{
+      if(line !== lastDesktopLog) writeLog(line);
+      lastDesktopLog = line;
+    }, probeCurrentDesktopId);
+  }finally{
+    followingDesktop = false;
+  }
 }
 
 function displayIdForSender(webContents){
