@@ -11,6 +11,7 @@ const { planOverlayWindows } = require('./display_layout');
 const { clampLevel } = require('../frontend/intensity');
 const { createScreenLocker, isTestMode } = require('./screen_lock');
 const { createPresenceGate } = require('./presence_gate');
+const { createVirtualDesktops, followCurrentDesktop } = require('./virtual_desktop');
 
 // Self-test harness only (SMARTSCREEN_TEST=1): isolated profile and a recorded camera source.
 const TEST_MODE = isTestMode();
@@ -209,6 +210,17 @@ function syncOverlayWindows(){
   if(plan.updates.length || plan.creates.length || plan.removes.length){
     writeLog(`OVERLAY_DISPLAYS_SYNCED|displays=${displays.length}|created=${plan.creates.length}|removed=${plan.removes.length}|updated=${plan.updates.length}`);
   }
+}
+
+// Keep every overlay on the virtual desktop the user is looking at (Windows only).
+let virtualDesktops = null;
+let lastDesktopLog = '';
+function followVirtualDesktops(){
+  if(!virtualDesktops) return;
+  followCurrentDesktop(allOverlayWindows(), virtualDesktops, (line)=>{
+    if(line !== lastDesktopLog) writeLog(line);
+    lastDesktopLog = line;
+  });
 }
 
 function displayIdForSender(webContents){
@@ -907,6 +919,10 @@ app.whenReady().then(()=>{
   for(const eventName of ['display-added','display-removed','display-metrics-changed']){
     screen.on(eventName,()=>syncOverlayWindows());
   }
+
+  virtualDesktops = createVirtualDesktops();
+  writeLog(`VIRTUAL_DESKTOP_FOLLOW|available=${virtualDesktops.available}`);
+  if(virtualDesktops.available) setInterval(followVirtualDesktops, 1000);
 
   // Never unlocks Windows: after a lock, unlock or resume the gate conceals and re-verifies.
   powerMonitor.on('lock-screen',()=>presenceGate.sessionLocked());

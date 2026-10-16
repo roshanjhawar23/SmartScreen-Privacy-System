@@ -138,3 +138,10 @@ test('§6/§7 one overlay per display, each covering the full display bounds', a
     expect(match.top).toBe(true);
   }
 });
+
+test('virtual desktops: follower is active and every overlay is on the current desktop', async () => {
+  ctx = await h.launchApp({ mock:'owner_present' });
+  await h.waitForEvent(ctx.logFile, 'VIRTUAL_DESKTOP_FOLLOW|available=true');
+  await ctx.page.waitForTimeout(1500);
+  expect(h.readEvents(ctx.logFile).some((e) => e.startsWith('OVERLAY_DESKTOP_FOLLOW_ERROR'))).toBe(false);
+});

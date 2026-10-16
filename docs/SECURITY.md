@@ -30,10 +30,17 @@ security boundary: SmartScreen may lock the session but never unlocks it or bypa
   unknown state puts the gate in FAILSAFE: the curtain stays up until a Retry plus owner verification, or
   a confirmed Disable Protection. This also applies when the Presence Gate toggle is off.
 - The tray "Hide Overlay" item is refused while the curtain is up.
-- **The curtain is a visibility control, not a security boundary.** It is an always-on-top window. It
-  cannot cover what Windows draws above all apps (secure desktop: UAC prompts, Ctrl+Alt+Del, the lock
-  screen), and other surfaces may also appear above it. The live-check coverage matrix in
-  `docs/testing/phase-1.5-results.md` records what was observed. Windows lock is the security boundary.
+- **The curtain is a visibility control, not a security boundary.** It is an always-on-top window.
+  Observed on Windows 11 (live check, `docs/testing/phase-1.5-results.md`):
+  - covered: desktop, app windows, taskbar, fullscreen browser video;
+  - **not covered** (Windows shell surfaces above every app window): Start menu (incl. recommended
+    files), Alt+Tab and Win+Tab thumbnails, notification toasts. Except toasts, these need someone at the
+    keyboard, which the walk-away and threat locks address;
+  - secure desktop (UAC, Ctrl+Alt+Del, lock screen) is drawn by Windows and shows no app content;
+  - virtual desktops: Electron cannot show a window on all desktops on Windows. SmartScreen moves its
+    overlays to the current desktop within ~1 s of a switch (`IVirtualDesktopManager`), so after a
+    switch the other desktop can be visible for up to about a second.
+  Windows lock is the security boundary.
 - Anyone at the keyboard can disable protection (with a confirmation) or quit the app; SmartScreen
   does not authenticate that person. It never unlocks Windows.
 
