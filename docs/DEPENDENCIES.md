@@ -5,8 +5,8 @@ All runtime pieces run CPU-only and offline.
 
 | Dependency | Version | License | Used for | Ships? |
 |---|---|---|---|---|
-| Electron | ^28 | MIT | App shell | yes |
-| electron-builder | ^24 | MIT | Installer build | no (build) |
+| Electron | 44.5.1 (exact) | MIT | App shell / runtime (upgraded from 28 in Phase 5: Electron ≤ 41.10.5 has high-severity advisories) | yes |
+| electron-builder | 26.17.0 (exact) | MIT | Installer build. Build-time advisory: sprintf-js (moderate) via global-agent; not shipped | no (build) |
 | opencv-contrib-python | >=4.10 | Apache-2.0 | Camera, YuNet/SFace runtime | yes |
 | numpy | >=1.26 | BSD-3-Clause | Embedding math | yes |
 | YuNet `face_detection_yunet_2023mar.onnx` | 2023mar | MIT (OpenCV Zoo) | Face detection | yes |
