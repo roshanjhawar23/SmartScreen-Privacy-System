@@ -111,3 +111,10 @@ cancelButton.addEventListener('click',()=>{
 
 window.addEventListener('beforeunload',stopCamera);
 updateProgress();
+
+// Phase 4: show whom this enrollment is for (chosen in the panel's Trusted people section).
+window.enrollmentAPI.getTarget?.().then((target) => {
+  if(!target?.name) return;
+  const verb = target.mode === 'reenroll' ? 'Re-enrolling' : 'Enrolling';
+  instruction.textContent = `${verb} ${target.name}. Start the camera to begin.`;
+}).catch(() => {});

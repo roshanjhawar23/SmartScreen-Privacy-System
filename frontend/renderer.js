@@ -194,8 +194,11 @@ function clearAutomaticProtection() {
   renderProtectionLayers();
 }
 
+// Enterprise policy (Phase 4): main enforces it; the panel shows locked controls as locked.
+let enterprisePolicy = { managed:false, minimumIntensity:0, presenceGateRequired:false, allowDisableProtection:true };
+
 function setIntensity(level) {
-  intensityLevel = Intensity.clampLevel(level);
+  intensityLevel = Math.max(enterprisePolicy.minimumIntensity || 0, Intensity.clampLevel(level));
   if (intensitySlider && Number(intensitySlider.value) !== intensityLevel) intensitySlider.value = String(intensityLevel);
   if (intensityValue) intensityValue.textContent = String(intensityLevel);
   renderProtectionLayers();
@@ -399,7 +402,7 @@ function applyGate(snapshot) {
   }
   updateButtonState(gateBtn, gate.enabled);
   // The toggle cannot remove the curtain: it only changes while protection is off.
-  if (gateBtn) gateBtn.disabled = Boolean(gate.active);
+  if (gateBtn) gateBtn.disabled = Boolean(gate.active) || Boolean(enterprisePolicy.presenceGateRequired);
   if (retryBtn) retryBtn.hidden = gate.state !== 'FAILSAFE';
   if (gate.state === 'FAILSAFE') {
     // Protection stays on in FAILSAFE: leaving it needs Retry or a confirmed Disable.
@@ -526,6 +529,10 @@ window.electronAPI.onPresenceGate((snapshot) => {
 });
 
 async function toggleAI() {
+  if (aiEnabled && enterprisePolicy.allowDisableProtection === false) {
+    showSecurityNotification('Protection cannot be disabled on this managed device');
+    return;
+  }
   if (aiEnabled) {
     const confirmed = await window.electronAPI.confirmProtectedAction({
       title: 'Disable protection',
@@ -719,28 +726,262 @@ async function refreshSecurityEvents(){
   }
 }
 
+let biometricEnrolled = false;
+
 async function refreshBiometricStatus() {
   if (!identityBtn) return;
 
   try {
     const status = await window.electronAPI.getBiometricStatus();
-    if (status.enrolled) {
-      identityBtn.textContent = 'Re-enroll Owner';
-    } else {
-      identityBtn.textContent = 'Enroll Owner';
-    }
+    biometricEnrolled = Boolean(status?.enrolled);
+    identityBtn.textContent = biometricEnrolled ? 'Manage' : 'Enroll owner';
   } catch {
     identityBtn.textContent = 'Identity unavailable';
     identityBtn.disabled = true;
   }
 }
 
-identityBtn?.addEventListener('click', async () => {
-  identityBtn.disabled = true;
+// ---------------------------------------------------------------------------
+// Manage: trusted people, profile editor, auto-switch rules, settings transfer (Phase 4).
+const managePanel = document.getElementById('managePanel');
+const manageMessage = document.getElementById('manageMessage');
+const peopleList = document.getElementById('peopleList');
+const peopleNote = document.getElementById('peopleNote');
+const personName = document.getElementById('personName');
+const addPersonBtn = document.getElementById('addPersonBtn');
+const pfCurtain = document.getElementById('pfCurtain');
+const pfSensitivity = document.getElementById('pfSensitivity');
+const pfWalkAway = document.getElementById('pfWalkAway');
+const pfGlancing = document.getElementById('pfGlancing');
+const profileName = document.getElementById('profileName');
+const profileNote = document.getElementById('profileNote');
+const saveProfileBtn = document.getElementById('saveProfileBtn');
+const deleteProfileBtn = document.getElementById('deleteProfileBtn');
+const autoSwitchBtn = document.getElementById('autoSwitchBtn');
+const rulesList = document.getElementById('rulesList');
+const addWifiRuleBtn = document.getElementById('addWifiRuleBtn');
+const transferPass = document.getElementById('transferPass');
+const exportSettingsBtn = document.getElementById('exportSettingsBtn');
+const importSettingsBtn = document.getElementById('importSettingsBtn');
+let profileState = { active:'', names:[], custom:[], rules:[], autoSwitch:false, locked:false };
+let currentProfileDetails = null;
+
+function showManageMessage(text, isError = false) {
+  if (!manageMessage) return;
+  manageMessage.textContent = text || '';
+  manageMessage.classList.toggle('is-error', Boolean(isError));
+}
+
+function handleResult(result, okText) {
+  if (result?.ok) { showManageMessage(okText); return true; }
+  if (!result?.cancelled) showManageMessage(result?.error || 'Not possible right now.', true);
+  return false;
+}
+
+function button(label, onClick, disabled = false) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.disabled = disabled;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function renderPeople(view) {
+  if (!peopleList || !view) return;
+  peopleList.replaceChildren();
+  const blocked = view.blocked;
+  if (peopleNote) peopleNote.textContent = blocked || '';
+  for (const person of view.people || []) {
+    const row = document.createElement('div');
+    row.className = 'manage-row';
+    const label = document.createElement('span');
+    label.textContent = person.name;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = ` · ${person.sampleCount} samples`;
+    label.appendChild(meta);
+    const rename = button('Rename', () => startRename(row, person), Boolean(blocked));
+    const reenroll = button('Re-enroll', async () => {
+      handleResult(await window.electronAPI.enrollTrustedPerson({ mode:'reenroll', id:person.id }), `Re-enrolling ${person.name}…`);
+    }, Boolean(blocked));
+    const remove = button('Remove', async () => {
+      const result = await window.electronAPI.removeTrustedPerson(person.id);
+      if (handleResult(result, `${person.name} removed.`)) renderPeople(result);
+    }, Boolean(blocked) || (view.people || []).length <= 1);
+    row.append(label, rename, reenroll, remove);
+    peopleList.appendChild(row);
+  }
+  if (personName) personName.disabled = Boolean(blocked);
+  if (addPersonBtn) addPersonBtn.disabled = Boolean(blocked);
+}
+
+function startRename(row, person) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.maxLength = 40;
+  input.value = person.name;
+  input.setAttribute('aria-label', `New name for ${person.name}`);
+  const save = button('OK', async () => {
+    const result = await window.electronAPI.renameTrustedPerson(person.id, input.value);
+    if (handleResult(result, 'Renamed.')) renderPeople(result);
+  });
+  const cancel = button('Cancel', () => refreshManage());
+  row.replaceChildren(input, save, cancel);
+  input.focus?.();
+}
+
+function describeRule(rule) {
+  if (rule.type === 'wifi') return `Wi-Fi network → ${rule.profile}`;
+  const days = (rule.days || []).length === 7 ? 'every day' : (rule.days || []).map((d) => 'SunMonTueWedThuFriSat'.slice(d * 3, d * 3 + 3)).join(' ');
+  return `${rule.from}–${rule.to} ${days} → ${rule.profile}`;
+}
+
+function renderRules(info) {
+  if (!info) return;
+  profileState = { ...profileState, ...info };
+  if (autoSwitchBtn) {
+    autoSwitchBtn.textContent = profileState.autoSwitch ? 'On' : 'Off';
+    updateButtonState(autoSwitchBtn, profileState.autoSwitch);
+    autoSwitchBtn.disabled = Boolean(profileState.locked);
+  }
+  if (addWifiRuleBtn) addWifiRuleBtn.disabled = Boolean(profileState.locked);
+  if (!rulesList) return;
+  rulesList.replaceChildren();
+  for (const rule of profileState.rules || []) {
+    const row = document.createElement('div');
+    row.className = 'manage-row';
+    const label = document.createElement('span');
+    label.textContent = describeRule(rule);
+    const remove = button('Remove', async () => {
+      const result = await window.electronAPI.removeRule(rule.id);
+      if (handleResult(result, 'Rule removed.')) renderRules(result);
+    }, Boolean(profileState.locked));
+    row.append(label, remove);
+    rulesList.appendChild(row);
+  }
+}
+
+async function loadProfileEditor() {
+  const details = await window.electronAPI.getProfileDetails(profileState.active || undefined);
+  if (!details?.profile) return;
+  currentProfileDetails = details.profile;
+  if (pfWalkAway && pfWalkAway.childElementCount !== details.options.walkAwayMs.length) {
+    pfWalkAway.replaceChildren();
+    for (const ms of details.options.walkAwayMs) {
+      const option = document.createElement('option');
+      option.value = String(ms);
+      option.textContent = `${ms / 1000} s`;
+      pfWalkAway.appendChild(option);
+    }
+  }
+  const p = details.profile;
+  if (pfCurtain) pfCurtain.value = p.curtainEffect;
+  if (pfSensitivity) pfSensitivity.value = p.sensitivity;
+  if (pfWalkAway) pfWalkAway.value = String(p.walkAwayLockDelay);
+  if (pfGlancing) pfGlancing.value = String(p.glancingCounts);
+  if (profileName) profileName.value = p.readOnly ? '' : p.name;
+  if (profileName) profileName.placeholder = p.readOnly ? 'New profile name' : 'Profile name';
+  if (profileNote) profileNote.textContent = details.locked ? 'Managed by your organization' : (p.readOnly ? `${p.name} (built-in)` : p.name);
+  for (const el of [pfCurtain, pfSensitivity, pfWalkAway, pfGlancing, profileName, saveProfileBtn]) if (el) el.disabled = details.locked;
+  if (deleteProfileBtn) deleteProfileBtn.disabled = details.locked || p.readOnly;
+}
+
+async function refreshManage() {
   try {
-    await window.electronAPI.openEnrollment();
-  } finally {
-    identityBtn.disabled = false;
+    renderPeople(await window.electronAPI.getTrustedPeople());
+    renderRules(await window.electronAPI.getProfiles());
+    await loadProfileEditor();
+  } catch (error) {
+    showManageMessage('Manage is unavailable.', true);
+  }
+}
+
+identityBtn?.addEventListener('click', async () => {
+  if (!biometricEnrolled) {
+    identityBtn.disabled = true;
+    try { await window.electronAPI.enrollTrustedPerson({ mode:'add', name:'Owner' }); } finally { identityBtn.disabled = false; }
+    return;
+  }
+  const open = Boolean(managePanel?.hidden);
+  if (managePanel) managePanel.hidden = !open;
+  identityBtn.setAttribute('aria-expanded', String(open));
+  if (open) { showManageMessage(''); refreshManage(); }
+});
+
+addPersonBtn?.addEventListener('click', async () => {
+  const name = personName?.value.trim();
+  if (!name) { showManageMessage('Enter a name first.', true); return; }
+  if (handleResult(await window.electronAPI.enrollTrustedPerson({ mode:'add', name }), `Enrolling ${name}…`) && personName) personName.value = '';
+});
+
+saveProfileBtn?.addEventListener('click', async () => {
+  const name = profileName?.value.trim() || (currentProfileDetails && !currentProfileDetails.readOnly ? currentProfileDetails.name : '');
+  if (!name) { showManageMessage('Built-in profiles are read-only: enter a name to save a new profile.', true); return; }
+  const result = await window.electronAPI.saveProfile(name, {
+    curtainEffect:pfCurtain?.value, sensitivity:pfSensitivity?.value,
+    walkAwayLockDelay:Number(pfWalkAway?.value), glancingCounts:pfGlancing?.value === 'true'
+  });
+  if (handleResult(result, `Profile "${name}" saved.`)) { applyProfiles(result); renderRules(result); await loadProfileEditor(); }
+});
+
+deleteProfileBtn?.addEventListener('click', async () => {
+  if (!currentProfileDetails || currentProfileDetails.readOnly) return;
+  const result = await window.electronAPI.deleteProfile(currentProfileDetails.name);
+  if (handleResult(result, `Profile "${currentProfileDetails.name}" deleted.`)) { applyProfiles(result); renderRules(result); await loadProfileEditor(); }
+});
+
+autoSwitchBtn?.addEventListener('click', async () => {
+  const result = await window.electronAPI.setAutoSwitch(!profileState.autoSwitch);
+  if (handleResult(result, result?.autoSwitch ? 'Auto-switch on.' : 'Auto-switch off.')) { renderRules(result); applyProfiles(result); }
+});
+
+addWifiRuleBtn?.addEventListener('click', async () => {
+  const result = await window.electronAPI.addWifiRule();
+  if (handleResult(result, `${profileState.active} will be used on this Wi-Fi network.`)) renderRules(result);
+});
+
+exportSettingsBtn?.addEventListener('click', async () => {
+  const result = await window.electronAPI.exportSettings(transferPass?.value || '', { intensity:intensityLevel });
+  if (handleResult(result, `Settings exported: ${result?.file}`) && transferPass) transferPass.value = '';
+});
+
+importSettingsBtn?.addEventListener('click', async () => {
+  const result = await window.electronAPI.importSettings(transferPass?.value || '');
+  if (!handleResult(result, 'Settings imported.')) return;
+  if (transferPass) transferPass.value = '';
+  if (result.preferences?.intensity !== null && result.preferences?.intensity !== undefined) {
+    setIntensity(result.preferences.intensity);
+    saveIntensity(intensityLevel);
+  }
+  try { window.localStorage.setItem(GATE_STORAGE_KEY, String(Boolean(result.preferences?.presenceGateEnabled))); } catch {}
+  applyGate(await window.electronAPI.getPresenceGate());
+  applyProfiles(result);
+  renderRules(result);
+  await loadProfileEditor();
+});
+
+async function applyEnterprisePolicy() {
+  try {
+    const policy = await window.electronAPI.getEnterprisePolicy();
+    if (!policy) return;
+    enterprisePolicy = policy;
+    if (policy.managed) {
+      const status = document.getElementById('deviceStatus');
+      if (status) status.textContent = 'Managed by your organization';
+    }
+    if (intensitySlider) intensitySlider.min = String(policy.minimumIntensity || 0);
+    if (intensityLevel < (policy.minimumIntensity || 0)) { setIntensity(policy.minimumIntensity); saveIntensity(intensityLevel); }
+    if (policy.presenceGateRequired && gateBtn) gateBtn.title = 'Required by your organization';
+    applyGate(gate); // redraw: the toggle's locked state depends on the policy
+  } catch {}
+}
+
+window.electronAPI.onPolicyRefused((data) => {
+  if (data?.action === 'disable-protection') {
+    aiEnabled = true;
+    if (aiBtn) aiBtn.textContent = 'Disable Protection';
+    showSecurityNotification('Protection cannot be disabled on this managed device');
   }
 });
 
@@ -754,6 +995,7 @@ setIntensity(intensityLevel);
 setGateEnabled(loadGatePreference());
 Promise.resolve(window.electronAPI.getProfiles()).then(applyProfiles).catch(() => {});
 reportVideoDevices();
+applyEnterprisePolicy();
 refreshBiometricStatus();
 refreshSecurityEvents();
 setInterval(() => { if (aiEnabled) refreshSecurityEvents(); }, 5000);

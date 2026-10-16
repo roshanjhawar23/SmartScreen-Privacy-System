@@ -105,6 +105,21 @@ Counters and performance numbers stay on the device. "Export diagnostics" writes
 the user chooses; it contains counters, timings and event titles, never images, embeddings, templates
 or window titles.
 
+## Productization (Phase 4)
+- **Trusted people:** one template per person, each encrypted with `safeStorage` in
+  `userData/biometric/trusted/<id>.enc`; the listing never exposes embeddings. Any trusted person
+  counts as the owner (best match). Changes are refused while protection is on, so the set of faces that
+  can reveal the screen never changes mid-session. Up to 10 people. The single-owner template of earlier
+  versions is migrated once, verified by reading it back, then deleted.
+- **More trusted people = more chances of a false match.** Every added template is another face an
+  impostor could resemble; keep the list short.
+- **Profiles and rules:** custom profiles only choose between built-in timings (no free-form numbers), so
+  a profile cannot disable escalation entirely. Auto-switch by Wi-Fi name is convenience, not security:
+  anyone can create a network with the same name.
+- **Enterprise policy:** see `docs/ENTERPRISE.md`; it hardens the defaults but cannot stop a local
+  administrator from ending the process or editing the file.
+- **Settings transfer:** see `docs/design/cross-device.md` (passphrase encryption, allow-list, no faces).
+
 ## Pixelate
 While pixelate is on, the overlay is excluded from screen capture (so it can capture the screen
 underneath), which means screen sharing shows the raw screen during that time.

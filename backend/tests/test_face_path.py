@@ -120,3 +120,40 @@ def test_still_face_stays_liveness_unknown(tmp_path, monkeypatch):
     lines = run(tmp_path, monkeypatch, Recognizer(owner=True), detector=Detector(sway=0.0), seconds=6.0)
     last = states(lines)[-1]
     assert last.split("|tracks=")[1].split(":")[8] == "U"
+
+
+def test_any_trusted_person_counts_as_owner(tmp_path, monkeypatch):
+    """Phase 4: with several templates, the best match decides."""
+    second = np.zeros(128, dtype=np.float32)
+    second[0] = 1.0
+    other_person = np.ones(128, dtype=np.float32) / np.sqrt(128)  # TEMPLATE: the first trusted person
+
+    class SecondPerson(Recognizer):
+        def feature(self, aligned):
+            return second.reshape(1, 128)
+
+    lines = []
+    monkeypatch.setattr(face_detection, "emit", lines.append)
+    clock = Clock()
+    config = face_detection.parse_config({
+        "templates": [other_person.tolist(), second.tolist()], "processEveryN": 3, "confirmFrames": 3,
+        "cameraFailureTimeout": 1.0, "logDir": str(tmp_path),
+    })
+    try:
+        face_detection.run_monitor(Camera(clock, 3.0), Detector(), SecondPerson(), config,
+                                   threading.Event(), clock=clock, sleep=clock.sleep)
+    except CameraError:
+        pass
+    found = states(lines)
+    assert found and found[0].startswith("STATE|OWNER_PRESENT|faces=1|owners=1|unknown=0|best=1.0000")
+
+
+def test_templates_config_validation():
+    import pytest
+
+    assert len(face_detection.parse_config({"templates": [[1.0, 0.0], [0.0, 1.0]]})["templates"]) == 2
+    assert len(face_detection.parse_config({"template": [1.0, 0.0]})["templates"]) == 1
+    with pytest.raises(RuntimeError):
+        face_detection.parse_config({"templates": [[1.0, 0.0], [1.0, 0.0, 0.0]]})
+    with pytest.raises(RuntimeError):
+        face_detection.parse_config({"templates": [[]]})

@@ -97,7 +97,50 @@
       <button id="diagExportBtn" type="button">Export diagnostics</button>
     </div>
 
-    <button id="identityBtn" class="identity-action" type="button">Enroll Owner</button>
+    <div id="managePanel" class="manage-panel" hidden>
+      <section class="manage-section">
+        <div class="manage-head"><span class="section-label">TRUSTED PEOPLE</span><span id="peopleNote" class="manage-note"></span></div>
+        <div id="peopleList" class="manage-list"></div>
+        <div class="inline-form">
+          <input id="personName" type="text" maxlength="40" placeholder="Name" aria-label="New trusted person name">
+          <button id="addPersonBtn" type="button">Add person</button>
+        </div>
+      </section>
+
+      <section class="manage-section">
+        <div class="manage-head"><span class="section-label">PROFILE</span><span id="profileNote" class="manage-note"></span></div>
+        <div class="form-grid">
+          <label>Curtain<select id="pfCurtain"><option value="blackout">Blackout</option><option value="blur">Blur</option><option value="pixelate">Pixelate</option></select></label>
+          <label>Sensitivity<select id="pfSensitivity"><option value="relaxed">Relaxed</option><option value="normal">Normal</option><option value="strict">Strict</option></select></label>
+          <label>Walk-away lock<select id="pfWalkAway"></select></label>
+          <label>Glancing<select id="pfGlancing"><option value="true">Counts</option><option value="false">Ignored</option></select></label>
+        </div>
+        <div class="inline-form">
+          <input id="profileName" type="text" maxlength="32" placeholder="Profile name" aria-label="Profile name">
+          <button id="saveProfileBtn" type="button">Save</button>
+          <button id="deleteProfileBtn" type="button">Delete</button>
+        </div>
+      </section>
+
+      <section class="manage-section">
+        <div class="manage-head"><span class="section-label">AUTO-SWITCH</span><button id="autoSwitchBtn" type="button" aria-pressed="false">Off</button></div>
+        <div id="rulesList" class="manage-list"></div>
+        <button id="addWifiRuleBtn" type="button">Use this profile on the current Wi-Fi</button>
+      </section>
+
+      <section class="manage-section">
+        <div class="manage-head"><span class="section-label">SETTINGS TRANSFER</span></div>
+        <div class="inline-form">
+          <input id="transferPass" type="password" minlength="8" placeholder="Passphrase (8+ characters)" aria-label="Transfer passphrase">
+          <button id="exportSettingsBtn" type="button">Export</button>
+          <button id="importSettingsBtn" type="button">Import</button>
+        </div>
+        <div class="manage-note">Profiles and preferences only. Faces are never exported.</div>
+      </section>
+      <div id="manageMessage" class="manage-message" aria-live="polite"></div>
+    </div>
+
+    <button id="identityBtn" class="identity-action" type="button" aria-expanded="false">Manage</button>
   </div>
 
   <div id="aiWarning">Privacy protection triggered</div>

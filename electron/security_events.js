@@ -55,6 +55,14 @@ function describeEvent(raw){
     const kind = field(raw,1);
     return { type:'TAMPER', title:TAMPER_TITLES[kind] || 'Tamper detected', detail:raw.split('|').slice(2).join(' ').slice(0,80) };
   }
+  if(raw === 'BIOMETRIC_MIGRATED|people=1') return { type:'IDENTITY', title:'Owner moved to Trusted people' };
+  if(raw === 'TRUSTED_PERSON_RENAMED') return { type:'IDENTITY', title:'Trusted person renamed' };
+  if(raw === 'TRUSTED_PERSON_REMOVED') return { type:'IDENTITY', title:'Trusted person removed' };
+  if(raw.startsWith('PROFILE_SAVED|')) return { type:'SYSTEM', title:`Profile saved: ${field(raw,1,'profile=')}` };
+  if(raw.startsWith('PROFILE_DELETED|')) return { type:'SYSTEM', title:`Profile deleted: ${field(raw,1,'profile=')}` };
+  if(raw.startsWith('ENTERPRISE_REFUSED|')) return { type:'SYSTEM', title:'Blocked by organization policy', detail:field(raw,1,'action=') };
+  if(raw.startsWith('SETTINGS_EXPORTED|')) return { type:'SYSTEM', title:'Settings exported' };
+  if(raw.startsWith('SETTINGS_IMPORTED|')) return { type:'SYSTEM', title:'Settings imported' };
   if(raw.startsWith('CONFIG_CHANGED_SINCE_LAST_RUN|')) return { type:'SYSTEM', title:'Settings changed since last run', detail:field(raw,1,'file=') };
   if(raw === 'DEVICE_SETUP_COMPLETE') return { type:'SETUP', title:'Device setup completed' };
   if(raw.startsWith('BIOMETRIC_ENROLLED|')) return { type:'IDENTITY', title:'Owner identity enrolled', detail:field(raw,1,'samples=') };

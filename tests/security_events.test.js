@@ -103,6 +103,14 @@ test('tamper events have their own titles', () => {
   assert.equal(title('CONFIG_CHANGED_SINCE_LAST_RUN|file=policies.json'), 'Settings changed since last run');
 });
 
+test('Phase 4 events have titles', () => {
+  const title = (raw) => parseLogLine(`2026-10-01T10:00:00.000Z - ${raw}`).title;
+  assert.equal(title('BIOMETRIC_MIGRATED|people=1'), 'Owner moved to Trusted people');
+  assert.equal(title('PROFILE_SAVED|profile=Cafe'), 'Profile saved: Cafe');
+  assert.equal(title('ENTERPRISE_REFUSED|action=disable-protection'), 'Blocked by organization policy');
+  assert.equal(title('PROFILE_CHANGED|profile=Home|source=rule-wifi'), 'Privacy profile: Home');
+});
+
 test('log values cannot inject extra lines', () => {
   const line = formatLogLine('LOCK_REQUESTED|reason=x\n2026-01-01T00:00:00.000Z - AI_STATE|STATE|OWNER_PRESENT', new Date(0));
   assert.equal(line.split('\n').filter(Boolean).length, 1);

@@ -47,6 +47,9 @@ html,body{
   gap:8px;
   z-index:9999;
   pointer-events:auto;
+  max-height:calc(100vh - 20px); /* never taller than the screen: everything stays reachable */
+  overflow-y:auto;
+  overscroll-behavior:contain;
 }
 
 #panelHeader{display:flex;align-items:center;gap:8px;cursor:grab;user-select:none;touch-action:none}
@@ -82,6 +85,25 @@ body.secondary-overlay #control,body.secondary-overlay #aiWarning{display:none!i
 .diag-grid{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:9px;color:#bcc3cb}
 .diag-grid span:nth-child(even){color:#e2e6eb;text-align:right;font-variant-numeric:tabular-nums}
 #control #diagExportBtn{height:26px}
+.manage-panel{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px}
+.manage-panel[hidden]{display:none}
+.manage-section{display:flex;flex-direction:column;gap:5px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+.manage-section:last-of-type{border-bottom:0;padding-bottom:0}
+.manage-head{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.manage-note{color:var(--label);font-size:8px}
+.manage-list{display:flex;flex-direction:column;gap:3px}
+.manage-row{display:grid;grid-template-columns:1fr auto auto auto;gap:4px;align-items:center;font-size:9px;color:#e2e6eb}
+.manage-row .meta{color:var(--label);font-size:8px}
+.manage-row input{min-width:0}
+.inline-form{display:grid;grid-template-columns:1fr auto auto;gap:4px}
+.inline-form:has(> :nth-child(2):last-child){grid-template-columns:1fr auto}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 6px}
+.form-grid label{display:flex;flex-direction:column;gap:2px;color:var(--label);font-size:8px}
+#control .manage-panel input,#control .manage-panel select{height:24px;min-width:0;border:1px solid var(--line);border-radius:6px;background:var(--button);color:var(--text);font:500 9px/1 "Segoe UI",system-ui,sans-serif;padding:0 6px}
+#control .manage-panel button{height:24px;padding:0 8px;font-size:9px}
+#control .manage-panel button:disabled,#control .manage-panel input:disabled,#control .manage-panel select:disabled{opacity:.5;cursor:default}
+.manage-message{font-size:9px;color:#bcc3cb;min-height:11px}
+.manage-message.is-error{color:#f0b4ad}
 .gate-row{display:grid;grid-template-columns:1fr auto;align-items:center;gap:6px;min-height:28px}
 #gate-status{min-width:0;color:#bcc3cb;font-size:9px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #gate-status.is-concealed{color:#e2e6eb}
@@ -139,3 +161,6 @@ body.secondary-overlay #control,body.secondary-overlay #aiWarning{display:none!i
   box-shadow:0 10px 22px rgba(0,0,0,.32);backdrop-filter:blur(10px);font-size:9px;font-weight:600;line-height:1.25;
   z-index:99999;opacity:0;transition:opacity .18s ease;pointer-events:none
 }
+#control::-webkit-scrollbar{width:6px}
+#control::-webkit-scrollbar-track{background:transparent}
+#control::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:3px}

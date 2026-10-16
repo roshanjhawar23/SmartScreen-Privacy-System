@@ -43,7 +43,8 @@ function loadOwnerEmbedding(useOwner){
 // foreground window never influences a test); change it mid-run with setActiveApp().
 // configCopy: run on a temporary copy of config/ (returned as ctx.configDir) so tests may edit it;
 // configDir: reuse such a copy from an earlier launch.
-async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, settings, userData:reuse, seedLog, activeApp = NEUTRAL_APP, configCopy = false, configDir:reuseConfig = null } = {}){
+// policy: enterprise policy object (test file); wifi: simulated SSID; profiles: userData/profiles.json.
+async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, settings, userData:reuse, seedLog, activeApp = NEUTRAL_APP, configCopy = false, configDir:reuseConfig = null, policy = null, wifi = null, profiles = null } = {}){
   const userData = reuse || fs.mkdtempSync(path.join(os.tmpdir(), 'smartscreen-e2e-'));
   if(seedLog){
     fs.mkdirSync(path.join(userData, 'logs'), { recursive:true });
@@ -68,6 +69,15 @@ async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, 
   if(mock) env.SMARTSCREEN_MOCK_BACKEND = mockScenarioPath(mock);
   else env.SMARTSCREEN_CAMERA_SOURCE = cameraSource || scenarioPath(scenario);
   if(settings) env.SMARTSCREEN_TEST_SETTINGS = JSON.stringify(settings);
+  if(policy){
+    const policyFile = path.join(userData, 'test_policy.json');
+    fs.writeFileSync(policyFile, JSON.stringify(policy));
+    env.SMARTSCREEN_TEST_POLICY_FILE = policyFile;
+  }
+  const wifiFile = path.join(userData, 'test_wifi.txt');
+  fs.writeFileSync(wifiFile, wifi || '');
+  env.SMARTSCREEN_TEST_WIFI_FILE = wifiFile;
+  if(profiles) fs.writeFileSync(path.join(userData, 'profiles.json'), JSON.stringify(profiles));
   let configDir = reuseConfig;
   if(configDir) env.SMARTSCREEN_CONFIG_DIR = configDir;
   else if(configCopy){
@@ -85,8 +95,27 @@ async function launchApp({ mock, scenario, cameraSource, ownerTemplate = !mock, 
   const encrypted = await app.evaluate(({ safeStorage }, json) => safeStorage.encryptString(json).toString('base64'), JSON.stringify(template));
   fs.mkdirSync(path.join(userData, 'biometric'), { recursive:true });
   fs.writeFileSync(path.join(userData, 'biometric', 'owner_face.enc'), encrypted);
+  // The renderer read the enrollment status at load, before this template existed; tell it,
+  // exactly as a finished enrollment does.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('biometric-updated', { enrolled:true })));
 
-  return { app, page, userData, activeAppFile, configDir, logFile:path.join(userData, 'logs', 'activity.log') };
+  return { app, page, userData, activeAppFile, configDir, wifiFile, logFile:path.join(userData, 'logs', 'activity.log') };
+}
+
+function setWifi(ctx, ssid){
+  fs.writeFileSync(ctx.wifiFile, ssid || '');
+}
+
+// Adds a trusted person file encrypted with the app's own safeStorage (Phase 4 layout).
+async function seedTrustedPerson(ctx, { id, name, seed = 7 }){
+  const person = {
+    id, name, createdAt:new Date().toISOString(), sampleCount:5,
+    embedding:Array.from({ length:128 }, (_, i) => Math.sin(seed + i))
+  };
+  const encrypted = await ctx.app.evaluate(({ safeStorage }, json) => safeStorage.encryptString(json).toString('base64'), JSON.stringify(person));
+  const dir = path.join(ctx.userData, 'biometric', 'trusted');
+  fs.mkdirSync(dir, { recursive:true });
+  fs.writeFileSync(path.join(dir, `${id}.enc`), encrypted);
 }
 
 function setActiveApp(ctx, app){
@@ -201,5 +230,5 @@ async function snap(page, testInfo, name){
 module.exports = {
   REPO_DIR, PRIVATE_DIR, scenarioPath, mockScenarioPath, missingFixtures, launchApp, closeApp,
   readEvents, waitForEvent, indexOfEvent, enableProtection, layerOpacity, anyProtectiveLayerOn, expectEventOrder, snap,
-  curtainOn, autoConfirmDialogs, emitPowerEvent, msBetween, setActiveApp
+  curtainOn, autoConfirmDialogs, emitPowerEvent, msBetween, setActiveApp, setWifi, seedTrustedPerson
 };

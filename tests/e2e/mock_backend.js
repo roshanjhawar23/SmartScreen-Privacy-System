@@ -157,7 +157,9 @@ function main(){
         configured = true;
         try{
           const config = JSON.parse(line);
-          if(!Array.isArray(config.template) || config.template.length === 0) throw new Error('template missing');
+          // Phase 4: one template per trusted person ("templates"); "template" is the older form.
+          const templates = Array.isArray(config.templates) ? config.templates : (Array.isArray(config.template) ? [config.template] : []);
+          if(templates.length === 0 || !templates.every((t) => Array.isArray(t) && t.length > 0)) throw new Error('template missing');
         }catch(error){
           out(`AI_ERROR|AI_UNAVAILABLE|Invalid AI configuration: ${error.message}`);
           process.exit(1);

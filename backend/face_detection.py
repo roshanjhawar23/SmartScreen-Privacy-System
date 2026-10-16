@@ -66,9 +66,17 @@ def open_camera() -> cv2.VideoCapture | None:
 
 def parse_config(raw: dict) -> dict:
     config = dict(raw)
-    template = config.get("template")
-    if not isinstance(template, list) or not template:
+    # Phase 4: one template per trusted person ("templates"); "template" is the single-owner form.
+    templates = config.get("templates")
+    if not isinstance(templates, list) or not templates:
+        single = config.get("template")
+        templates = [single] if isinstance(single, list) and single else []
+    if not templates or not all(isinstance(t, list) and t for t in templates):
         raise RuntimeError("Owner biometric template is missing.")
+    config["templates"] = [normalize(np.asarray(t, dtype=np.float32)).tolist() for t in templates]
+    if len({len(t) for t in config["templates"]}) != 1:
+        raise RuntimeError("Trusted templates have different sizes.")
+    template = config["templates"][0]
 
     config["template"] = normalize(np.asarray(template, dtype=np.float32)).tolist()
     config["threshold"] = float(config.get("threshold", 0.363))
@@ -156,7 +164,8 @@ def liveness_sample(gray, face, pose, now) -> LivenessSample:
     )
 
 
-def observe_frame(frame, detector, recognizer, owner_template, config, now=0.0) -> FrameObservation:
+def observe_frame(frame, detector, recognizer, owner_templates, config, now=0.0) -> FrameObservation:
+    """owner_templates: (people × dims) matrix; a face's owner similarity is its best match."""
     height, width = frame.shape[:2]
     detector.setInputSize((width, height))
     _, faces = detector.detect(frame)
@@ -174,7 +183,7 @@ def observe_frame(frame, detector, recognizer, owner_template, config, now=0.0) 
 
         aligned = recognizer.alignCrop(frame, face[:-1])
         feature = normalize(recognizer.feature(aligned))
-        similarity = float(np.dot(owner_template, feature))
+        similarity = float(np.max(owner_templates @ feature))
 
         if similarity >= config["threshold"]:
             obs.owners += 1
@@ -197,7 +206,7 @@ def observe_frame(frame, detector, recognizer, owner_template, config, now=0.0) 
 
 def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None, clock=time.monotonic, sleep=time.sleep):
     """Vision loop. Returns normally on stop; raises CameraError when frames stop arriving."""
-    owner_template = np.asarray(config["template"], dtype=np.float32)
+    owner_templates = np.asarray(config["templates"], dtype=np.float32)
     process_every_n = int(config["processEveryN"])
     tracker = StateTracker(
         confirm_frames=int(config["confirmFrames"]),
@@ -247,7 +256,7 @@ def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None
             continue
 
         started = time.perf_counter()
-        obs = observe_frame(frame, detector, recognizer, owner_template, config, now)
+        obs = observe_frame(frame, detector, recognizer, owner_templates, config, now)
         obs.tracks = face_tracker.update(now, obs.detections)
         for track_id, state, reason in face_tracker.pop_liveness_changes():
             emit(f"LIVENESS|track={track_id}|state={state}|reason={reason}")

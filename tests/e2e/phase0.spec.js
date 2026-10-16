@@ -33,7 +33,7 @@ test('§2 startup state: intensity and identity button', async () => {
   ctx = await h.launchApp({ mock:'owner_present' });
   const { page } = ctx;
   await expect(page.locator('#intensityValue')).toHaveText('50');
-  await expect(page.locator('#identityBtn')).toHaveText('Re-enroll Owner');
+  await expect(page.locator('#identityBtn')).toHaveText('Manage'); // Phase 4: was "Re-enroll Owner"
   await expect(page.locator('#ai-status')).toHaveText('Inactive');
 });
 

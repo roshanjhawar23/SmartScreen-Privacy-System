@@ -4,7 +4,7 @@ const fs = require('fs');
 const { spawn, exec } = require('child_process');
 const crypto = require('crypto');
 const { isConfigured, createProfile, readProfile, markBiometricEnrolled } = require('./device_profile');
-const { saveTemplate, readTemplate } = require('./biometric_store');
+const { readTemplate, getTemplateFile } = require('./biometric_store');
 const { formatLogLine, readSecurityEvents } = require('./security_events');
 const { createLineSplitter, parseStateMessage, parseErrorMessage, parseStatsMessage, parseTamperMessage } = require('./ai_protocol');
 const { createProtectionSequence } = require('./protection_sequence');
@@ -18,6 +18,11 @@ const { decide } = require('./policy_engine');
 const { createActiveWindowReader } = require('./active_window');
 const { FAILSAFE_KINDS, configDigest, createClockMonitor, createRestartLoopDetector, diffDevices } = require('./tamper');
 const { createDiagnostics } = require('./diagnostics');
+const { createTrustedStore } = require('./trusted_people');
+const profileStore = require('./profile_store');
+const { createAutoSwitcher, parseNetshSsid } = require('./profile_rules');
+const enterprise = require('./enterprise_policy');
+const { exportBundle, importBundle } = require('./settings_transfer');
 
 // Self-test harness only (SMARTSCREEN_TEST=1): isolated profile and a recorded camera source.
 const TEST_MODE = isTestMode();
@@ -40,7 +45,10 @@ let logDir;
 let logFile;
 let settings = {};            // config/settings.json
 let testSettings = {};        // test mode only: SMARTSCREEN_TEST_SETTINGS, applied last
-let policies = normalizePolicies(null);
+let builtInPolicies = normalizePolicies(null); // config/policies.json (read-only)
+let userProfiles = profileStore.emptyUserProfiles(); // userData/profiles.json
+let enterprisePolicy = enterprise.parsePolicy(null); // %ProgramData%\SmartScreen\policy.json
+let policies = normalizePolicies(null);              // built-ins + custom, filtered by enterprise
 let activeProfile = policies.defaultProfile;
 let activeApp = null;         // { id, label, name } of a sensitive foreground app, else null
 let protectionActive = false; // from Enable until a confirmed Disable (stays on in FAILSAFE)
@@ -102,14 +110,49 @@ function policyStateFile(){
   return path.join(app.getPath('userData'), 'policy_state.json');
 }
 
+function enterprisePolicyFile(){
+  if(TEST_MODE && process.env.SMARTSCREEN_TEST_POLICY_FILE) return path.resolve(process.env.SMARTSCREEN_TEST_POLICY_FILE);
+  return path.join(process.env.ProgramData || 'C:\\ProgramData', 'SmartScreen', 'policy.json');
+}
+
+function loadEnterprisePolicy(){
+  let text = null;
+  try{ text = fs.readFileSync(enterprisePolicyFile(), 'utf8'); }catch{}
+  enterprisePolicy = enterprise.parsePolicy(text);
+  if(enterprisePolicy.managed){
+    writeLog(`ENTERPRISE_POLICY|managed=true${enterprisePolicy.error ? '|error=invalid' : ''}`);
+  }
+}
+
+function userProfilesFile(){
+  return path.join(app.getPath('userData'), 'profiles.json');
+}
+
+function saveUserProfiles(next){
+  userProfiles = profileStore.normalizeUserProfiles(next);
+  fs.writeFileSync(userProfilesFile(), JSON.stringify(userProfiles, null, 2));
+  rebuildPolicies();
+}
+
+// Built-ins + custom profiles; the enterprise policy limits which ones are offered.
+function rebuildPolicies(){
+  const merged = profileStore.mergePolicies(builtInPolicies, userProfiles);
+  const names = enterprise.allowedProfileNames(enterprisePolicy, Object.keys(merged.profiles));
+  const profiles = Object.fromEntries(names.map((n) => [n, merged.profiles[n]]));
+  policies = { ...merged, profiles, defaultProfile:names.includes(merged.defaultProfile) ? merged.defaultProfile : names[0] };
+  if(activeProfile && !policies.profiles[activeProfile]) activeProfile = policies.defaultProfile;
+}
+
 function loadPolicies(){
   try{
-    policies = normalizePolicies(JSON.parse(fs.readFileSync(path.join(CONFIG_DIR,'policies.json'),'utf8')));
+    builtInPolicies = normalizePolicies(JSON.parse(fs.readFileSync(path.join(CONFIG_DIR,'policies.json'),'utf8')));
   }catch(err){
     console.error('Failed to load policies:', err);
-    policies = normalizePolicies(null);
+    builtInPolicies = normalizePolicies(null);
     writeLog(`POLICIES_LOAD_ERROR|${err.message}`);
   }
+  try{ userProfiles = profileStore.normalizeUserProfiles(JSON.parse(fs.readFileSync(userProfilesFile(),'utf8'))); }catch{ userProfiles = profileStore.emptyUserProfiles(); }
+  rebuildPolicies();
   let saved = null;
   try{ saved = JSON.parse(fs.readFileSync(policyStateFile(),'utf8')).activeProfile; }catch{}
   activeProfile = resolveProfileName(policies, saved);
@@ -124,19 +167,22 @@ function effectiveSettings(){
   const profile = currentProfile();
   return {
     ...settings,
-    walkAwayLockDelay:profile.walkAwayLockDelay,
+    walkAwayLockDelay:enterprise.clampWalkAwayDelay(enterprisePolicy, profile.walkAwayLockDelay),
     ...testSettings,
     presenceGate:{
       ...(settings.presenceGate || {}),
       curtainEffect:profile.curtainEffect,
-      ...(testSettings.presenceGate || {})
-    }
+      ...(testSettings.presenceGate || {}),
+      ...(enterprisePolicy.presenceGateRequired ? { enabled:true } : {})
+    },
+    enterprise:enterprise.uiView(enterprisePolicy)
   };
 }
 
 function setActiveProfile(name, source){
   const next = resolveProfileName(policies, name);
   if(next !== name) return false;
+  if(next === activeProfile && source !== 'import') return true;
   activeProfile = next;
   try{ fs.writeFileSync(policyStateFile(), JSON.stringify({ activeProfile:next })); }catch(err){ writeLog(`POLICY_STATE_SAVE_ERROR|${err.message}`); }
   writeLog(`PROFILE_CHANGED|profile=${next}|source=${source}`);
@@ -147,8 +193,35 @@ function setActiveProfile(name, source){
 }
 
 function profileInfo(){
-  return { active:activeProfile, names:Object.keys(policies.profiles) };
+  return {
+    active:activeProfile,
+    names:Object.keys(policies.profiles),
+    custom:Object.keys(userProfiles.custom).filter((n) => policies.profiles[n]),
+    autoSwitch:userProfiles.autoSwitch,
+    rules:userProfiles.rules.map(({ id, type, profile, from, to, days }) => ({ id, type, profile, from, to, days })), // SSIDs stay in main
+    locked:enterprisePolicy.lockProfiles
+  };
 }
+
+// Auto-switch rules (Wi-Fi network, time of day). A manual choice holds until the context changes.
+async function currentSsid(){
+  if(TEST_MODE && process.env.SMARTSCREEN_TEST_WIFI_FILE){
+    try{ return fs.readFileSync(process.env.SMARTSCREEN_TEST_WIFI_FILE, 'utf8').trim() || null; }catch{ return null; }
+  }
+  if(process.platform !== 'win32') return null;
+  return new Promise((resolve) => {
+    exec('netsh wlan show interfaces', { windowsHide:true, timeout:5000 }, (err, stdout) => resolve(err ? null : parseNetshSsid(stdout)));
+  });
+}
+
+const autoSwitcher = createAutoSwitcher({
+  getRules:() => userProfiles.rules,
+  getContext:async () => ({ ssid:await currentSsid(), now:new Date() }),
+  isEnabled:() => userProfiles.autoSwitch,
+  getAvailableProfiles:() => Object.keys(policies.profiles),
+  getCurrent:() => activeProfile,
+  apply:(profile, rule) => setActiveProfile(profile, `rule-${rule.type}`)
+});
 
 // Foreground app, polled only while protection is on. Titles are matched, never logged.
 const activeWindowReader = createActiveWindowReader();
@@ -435,7 +508,7 @@ function sanitizeRenderState(state){
     blackout:value.blackout === true,
     focus:value.focus === true,
     vignette:value.vignette === true,
-    level:clampLevel(value.level)
+    level:enterprise.clampIntensity(enterprisePolicy, clampLevel(value.level))
   };
 }
 
@@ -478,7 +551,13 @@ function rebuildTrayMenu(){
     { type:'separator' },
     { label:'Protection status: Local device', enabled:false },
     { type:'separator' },
-    { label:'Exit', click:()=>app.quit() }
+    { label:'Exit', click:()=>{
+      if(protectionActive && !enterprisePolicy.allowQuit){
+        writeLog('ENTERPRISE_REFUSED|action=quit');
+        return;
+      }
+      app.quit();
+    } }
   ]));
 }
 
@@ -581,23 +660,67 @@ function createEnrollmentWindow(){
   });
 }
 
+// Trusted people (Phase 4): one safeStorage-encrypted template per person.
+let trustedStoreInstance = null;
+let pendingEnrollment = null; // { mode:'add', name } | { mode:'reenroll', id, name }
+
+function trustedStore(){
+  if(!trustedStoreInstance){
+    trustedStoreInstance = createTrustedStore({
+      dir:path.join(app.getPath('userData'), 'biometric', 'trusted'),
+      encrypt:(text) => safeStorage.encryptString(text),
+      decrypt:(buffer) => safeStorage.decryptString(buffer),
+      fs,
+      randomId:() => crypto.randomBytes(8).toString('hex')
+    });
+  }
+  return trustedStoreInstance;
+}
+
+// Migrates the single-owner template of Phases 1–3 once; safe to call repeatedly.
+function ensureTrustedPeople(){
+  if(!safeStorage.isEncryptionAvailable()) return;
+  const store = trustedStore();
+  if(store.count() > 0) return;
+  let legacy = null;
+  try{ legacy = readTemplate(app.getPath('userData')); }catch(error){ writeLog(`BIOMETRIC_MIGRATION_ERROR|${error.message}`); return; }
+  if(!legacy) return;
+  try{
+    const result = store.migrateLegacy(legacy);
+    if(result.migrated){
+      fs.unlinkSync(getTemplateFile(app.getPath('userData')));
+      writeLog('BIOMETRIC_MIGRATED|people=1');
+    }
+  }catch(error){
+    writeLog(`BIOMETRIC_MIGRATION_ERROR|${error.message}`);
+  }
+}
+
+function trustedPeopleChangeAllowed(){
+  if(enterprisePolicy.lockTrustedPeople) return 'Trusted people are managed by your organization.';
+  if(protectionActive) return 'Disable protection before changing trusted people.';
+  return null;
+}
+
+function trustedPeopleView(){
+  ensureTrustedPeople();
+  let people = [];
+  try{ people = safeStorage.isEncryptionAvailable() ? trustedStore().list() : []; }catch(error){ writeLog(`TRUSTED_PEOPLE_ERROR|${error.message}`); }
+  return { people, locked:Boolean(enterprisePolicy.lockTrustedPeople), blocked:trustedPeopleChangeAllowed() };
+}
+
 async function finishEnrollment(result){
   if(!safeStorage.isEncryptionAvailable()){
     throw new Error('OS-backed encryption is unavailable on this device.');
   }
 
-  const template = {
-    version:1,
-    model:'SFace',
-    distance:'cosine',
-    embedding:result.embedding,
-    sampleCount:result.sampleCount,
-    createdAt:new Date().toISOString()
-  };
-
-  saveTemplate(app.getPath('userData'), template);
+  ensureTrustedPeople();
+  const target = pendingEnrollment || { mode:'add', name:trustedStore().count() === 0 ? 'Owner' : 'Trusted person' };
+  pendingEnrollment = null;
+  if(target.mode === 'reenroll') trustedStore().reenroll(target.id, { embedding:result.embedding, sampleCount:result.sampleCount });
+  else trustedStore().add({ name:target.name, embedding:result.embedding, sampleCount:result.sampleCount });
   markBiometricEnrolled(app.getPath('userData'), { sampleCount: result.sampleCount });
-  writeLog(`BIOMETRIC_ENROLLED|samples=${result.sampleCount}`);
+  writeLog(`BIOMETRIC_ENROLLED|samples=${result.sampleCount}|mode=${target.mode}`);
 
   if(win && !win.isDestroyed()){
     win.webContents.send('biometric-updated', { enrolled:true, sampleCount:result.sampleCount });
@@ -715,10 +838,62 @@ ipcMain.handle('confirm-protected-action',async(_event,options)=>{
 
 ipcMain.handle('get-biometric-status',()=>{
   const profile = readProfile(app.getPath('userData'));
+  const view = trustedPeopleView();
   return {
-    enrolled:Boolean(profile?.biometric?.enrolled),
-    sampleCount:Number(profile?.biometric?.sampleCount || 0)
+    enrolled:Boolean(profile?.biometric?.enrolled) && (view.people.length > 0 || fs.existsSync(getTemplateFile(app.getPath('userData')))),
+    sampleCount:Number(profile?.biometric?.sampleCount || 0),
+    people:view.people.length
   };
+});
+
+ipcMain.handle('get-trusted-people',()=>trustedPeopleView());
+
+ipcMain.handle('enroll-trusted-person',(_event, request)=>{
+  const blocked = trustedPeopleChangeAllowed();
+  if(blocked) return { ok:false, error:blocked };
+  try{
+    if(request?.mode === 'reenroll'){
+      const person = trustedStore().list().find((p) => p.id === request.id);
+      if(!person) return { ok:false, error:'Unknown person.' };
+      pendingEnrollment = { mode:'reenroll', id:person.id, name:person.name };
+    }else{
+      const { validateName } = require('./trusted_people');
+      pendingEnrollment = { mode:'add', name:validateName(request?.name) };
+    }
+  }catch(error){
+    return { ok:false, error:error.message };
+  }
+  createEnrollmentWindow();
+  return { ok:true };
+});
+
+ipcMain.handle('get-enrollment-target',()=>pendingEnrollment ? { mode:pendingEnrollment.mode, name:pendingEnrollment.name } : null);
+
+ipcMain.handle('rename-trusted-person',(_event, id, name)=>{
+  const blocked = trustedPeopleChangeAllowed();
+  if(blocked) return { ok:false, error:blocked };
+  try{
+    trustedStore().rename(String(id), name);
+    writeLog('TRUSTED_PERSON_RENAMED');
+    return { ok:true, ...trustedPeopleView() };
+  }catch(error){ return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('remove-trusted-person',async(_event, id)=>{
+  const blocked = trustedPeopleChangeAllowed();
+  if(blocked) return { ok:false, error:blocked };
+  const person = trustedPeopleView().people.find((p) => p.id === id);
+  if(!person) return { ok:false, error:'Unknown person.' };
+  const confirmed = await dialog.showMessageBox(win && !win.isDestroyed() ? win : undefined, {
+    type:'warning', buttons:['Cancel','Remove'], defaultId:0, cancelId:0, noLink:true,
+    title:'Remove trusted person', message:`Remove "${person.name}"? Their face will no longer reveal the screen.`
+  });
+  if(confirmed.response !== 1) return { ok:false, cancelled:true };
+  try{
+    trustedStore().remove(person.id);
+    writeLog('TRUSTED_PERSON_REMOVED');
+    return { ok:true, ...trustedPeopleView() };
+  }catch(error){ return { ok:false, error:error.message }; }
 });
 
 ipcMain.handle('open-enrollment',async()=>{
@@ -931,16 +1106,21 @@ function startAI(){
   lastPoseKey = '';
   lastLivenessKey = '';
 
-  let template;
+  let templates = [];
   try{
-    template = readTemplate(app.getPath('userData'));
+    ensureTrustedPeople();
+    templates = trustedStore().templates().map((t) => t.embedding);
+    if(templates.length === 0){
+      const legacy = readTemplate(app.getPath('userData')); // migration failed: keep working with it
+      if(Array.isArray(legacy?.embedding) && legacy.embedding.length) templates = [legacy.embedding];
+    }
   }catch(error){
     writeLog(`AI_TEMPLATE_ERROR|${error.message}`);
-    reportAIFailure('AI_UNAVAILABLE',`Unable to read the owner biometric template: ${error.message}`);
+    reportAIFailure('AI_UNAVAILABLE',`Unable to read the trusted biometric templates: ${error.message}`);
     return;
   }
 
-  if(!template?.embedding || !Array.isArray(template.embedding) || template.embedding.length === 0){
+  if(templates.length === 0){
     reportAIFailure('AI_UNAVAILABLE','Owner identity is not enrolled.');
     return;
   }
@@ -993,7 +1173,7 @@ function startAI(){
 
   const cfg = effectiveSettings();
   const config = {
-    template: template.embedding,
+    templates,
     threshold: Number(cfg.recognitionThreshold ?? 0.363),
     detectionThreshold: Number(cfg.faceDetectionThreshold ?? 0.85),
     processEveryN: Math.max(1, Number(cfg.aiProcessEveryN ?? 3)),
@@ -1090,6 +1270,11 @@ function startAI(){
 // Deliberate disable (the renderer asks for confirmation first). The only manual way,
 // besides quitting, to remove the curtain.
 ipcMain.on('stop-ai',()=>{
+  if(!enterprisePolicy.allowDisableProtection){
+    writeLog('ENTERPRISE_REFUSED|action=disable-protection');
+    win?.webContents.send('policy-refused', { action:'disable-protection' });
+    return;
+  }
   stopAIProcess();
   protectionActive = false;
   setActiveAppPolling(false);
@@ -1100,6 +1285,126 @@ ipcMain.on('stop-ai',()=>{
 
 ipcMain.handle('get-presence-gate',()=>presenceGate.snapshot());
 ipcMain.handle('get-profiles',()=>profileInfo());
+
+function profilesLocked(){
+  return enterprisePolicy.lockProfiles ? 'Profiles are managed by your organization.' : null;
+}
+
+ipcMain.handle('get-profile-details',(_event,name)=>({
+  profile:profileStore.describeProfile(typeof name === 'string' ? name : activeProfile, policies, userProfiles),
+  options:{ walkAwayMs:profileStore.WALK_AWAY_OPTIONS, sensitivities:Object.keys(profileStore.SENSITIVITY_BASE) },
+  locked:Boolean(profilesLocked())
+}));
+
+ipcMain.handle('save-profile',(_event, name, editable)=>{
+  const blocked = profilesLocked();
+  if(blocked) return { ok:false, error:blocked };
+  try{
+    saveUserProfiles(profileStore.saveCustom(userProfiles, name, editable, Object.keys(builtInPolicies.profiles)));
+    const clean = String(name).trim();
+    writeLog(`PROFILE_SAVED|profile=${clean}`);
+    if(clean === activeProfile) presenceGate.refresh(); else setActiveProfile(clean, 'panel');
+    rebuildTrayMenu();
+    return { ok:true, ...profileInfo() };
+  }catch(error){ return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('delete-profile',(_event, name)=>{
+  const blocked = profilesLocked();
+  if(blocked) return { ok:false, error:blocked };
+  try{
+    saveUserProfiles(profileStore.deleteCustom(userProfiles, name));
+    writeLog(`PROFILE_DELETED|profile=${name}`);
+    if(!policies.profiles[activeProfile] || activeProfile === name) setActiveProfile(policies.defaultProfile, 'panel');
+    rebuildTrayMenu();
+    return { ok:true, ...profileInfo() };
+  }catch(error){ return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('set-auto-switch',async(_event, enabled)=>{
+  const blocked = profilesLocked();
+  if(blocked) return { ok:false, error:blocked };
+  saveUserProfiles({ ...userProfiles, autoSwitch:enabled === true });
+  writeLog(`PROFILE_AUTO_SWITCH|enabled=${enabled === true}`);
+  autoSwitcher.reset();
+  if(enabled === true) await autoSwitcher.evaluate();
+  return { ok:true, ...profileInfo() };
+});
+
+ipcMain.handle('add-wifi-rule',async()=>{
+  const blocked = profilesLocked();
+  if(blocked) return { ok:false, error:blocked };
+  const ssid = await currentSsid();
+  if(!ssid) return { ok:false, error:'Not connected to a Wi-Fi network.' };
+  const rules = userProfiles.rules.filter((r) => !(r.type === 'wifi' && r.ssid === ssid));
+  rules.unshift({ id:`wifi-${crypto.randomBytes(4).toString('hex')}`, type:'wifi', profile:activeProfile, ssid });
+  saveUserProfiles({ ...userProfiles, rules });
+  writeLog(`PROFILE_RULE_ADDED|type=wifi|profile=${activeProfile}`);
+  return { ok:true, ...profileInfo() };
+});
+
+ipcMain.handle('remove-rule',(_event, id)=>{
+  const blocked = profilesLocked();
+  if(blocked) return { ok:false, error:blocked };
+  saveUserProfiles({ ...userProfiles, rules:userProfiles.rules.filter((r) => r.id !== id) });
+  writeLog('PROFILE_RULE_REMOVED');
+  return { ok:true, ...profileInfo() };
+});
+
+// Encrypted settings transfer: preferences only, never biometric data.
+ipcMain.handle('export-settings',async(_event, passphrase, preferences)=>{
+  try{
+    const text = exportBundle({
+      customProfiles:userProfiles.custom, rules:userProfiles.rules, autoSwitch:userProfiles.autoSwitch,
+      activeProfile, presenceGateEnabled:presenceGate.snapshot().enabled,
+      intensity:clampLevel(preferences?.intensity)
+    }, passphrase);
+    const result = await dialog.showSaveDialog(win && !win.isDestroyed() ? win : undefined, {
+      title:'Export settings', defaultPath:path.join(app.getPath('documents'), 'smartscreen-settings.json'),
+      filters:[{ name:'SmartScreen settings', extensions:['json'] }]
+    });
+    if(result.canceled || !result.filePath) return { ok:false, cancelled:true };
+    fs.writeFileSync(result.filePath, text);
+    writeLog(`SETTINGS_EXPORTED|file=${path.basename(result.filePath)}`);
+    return { ok:true, file:path.basename(result.filePath) };
+  }catch(error){ return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('import-settings',async(_event, passphrase)=>{
+  if(enterprisePolicy.lockImport) return { ok:false, error:'Import is disabled by your organization.' };
+  if(protectionActive) return { ok:false, error:'Disable protection before importing settings.' };
+  try{
+    const picked = await dialog.showOpenDialog(win && !win.isDestroyed() ? win : undefined, {
+      title:'Import settings', properties:['openFile'], filters:[{ name:'SmartScreen settings', extensions:['json'] }]
+    });
+    if(picked.canceled || !picked.filePaths?.[0]) return { ok:false, cancelled:true };
+    const { settings:imported } = importBundle(fs.readFileSync(picked.filePaths[0], 'utf8'), passphrase);
+    if(!enterprisePolicy.lockProfiles){
+      saveUserProfiles({
+        ...userProfiles,
+        custom:imported.customProfiles ?? userProfiles.custom,
+        rules:imported.rules ?? userProfiles.rules,
+        autoSwitch:imported.autoSwitch ?? userProfiles.autoSwitch
+      });
+    }
+    if(imported.activeProfile && policies.profiles[imported.activeProfile]) setActiveProfile(imported.activeProfile, 'import');
+    if(typeof imported.presenceGateEnabled === 'boolean' && !(enterprisePolicy.presenceGateRequired && !imported.presenceGateEnabled)){
+      presenceGate.setEnabled(imported.presenceGateEnabled);
+    }
+    rebuildTrayMenu();
+    writeLog(`SETTINGS_IMPORTED|file=${path.basename(picked.filePaths[0])}`);
+    return {
+      ok:true,
+      preferences:{
+        intensity:imported.intensity === undefined ? null : enterprise.clampIntensity(enterprisePolicy, clampLevel(imported.intensity)),
+        presenceGateEnabled:presenceGate.snapshot().enabled
+      },
+      ...profileInfo()
+    };
+  }catch(error){ return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('get-enterprise-policy',()=>enterprise.uiView(enterprisePolicy));
 
 // Renderer reports the video input devices (deviceIds only) on load and on devicechange.
 ipcMain.on('video-devices',(event, ids)=>{
@@ -1135,6 +1440,10 @@ ipcMain.handle('export-diagnostics',async()=>{
 });
 ipcMain.handle('set-profile',(_event,name)=>({ ok:typeof name === 'string' && setActiveProfile(name, 'panel'), ...profileInfo() }));
 ipcMain.handle('set-presence-gate',(_event,enabled)=>{
+  if(enterprisePolicy.presenceGateRequired && enabled !== true){
+    writeLog('ENTERPRISE_REFUSED|action=presence-gate-off');
+    return { ok:false, snapshot:presenceGate.snapshot() };
+  }
   const ok = presenceGate.setEnabled(enabled === true);
   if(ok) writeLog(`PRESENCE_GATE_SETTING|enabled=${enabled === true}`);
   return { ok, snapshot:presenceGate.snapshot() };
@@ -1193,8 +1502,10 @@ app.whenReady().then(()=>{
   configureCameraPermissions();
   loadSettings();
   if(TEST_MODE) writeLog('TEST_MODE_ACTIVE');
+  loadEnterprisePolicy();
   loadPolicies();
   writeLog(`PROFILE_ACTIVE|profile=${activeProfile}`);
+  if(enterprisePolicy.presenceGateRequired) presenceGate.setEnabled(true);
   runRuntimeHealthCheck();
 
   for(const eventName of ['display-added','display-removed','display-metrics-changed']){
@@ -1212,6 +1523,10 @@ app.whenReady().then(()=>{
   powerMonitor.on('suspend',()=>clockMonitor.reset());
 
   startConfigIntegrity();
+  ensureTrustedPeople();
+  const ruleInterval = Math.max(1000, Number(effectiveSettings().profileRuleIntervalMs ?? 30000) || 30000);
+  setInterval(()=>{ autoSwitcher.evaluate().catch(()=>{}); }, ruleInterval);
+  autoSwitcher.evaluate().catch(()=>{});
   setInterval(checkClock, 5000);
   setInterval(()=>{ if(protectionActive) writeLog(diagnostics.summaryLine(electronMetrics())); }, 60000);
 
