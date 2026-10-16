@@ -1180,8 +1180,8 @@ app.whenReady().then(()=>{
   if(virtualDesktops.available) setInterval(followVirtualDesktops, 1000);
 
   // Never unlocks Windows: after a lock, unlock or resume the gate conceals and re-verifies.
-  powerMonitor.on('lock-screen',()=>presenceGate.sessionLocked());
-  powerMonitor.on('unlock-screen',()=>presenceGate.sessionUnlocked());
+  powerMonitor.on('lock-screen',()=>{ writeLog('SESSION_LOCKED'); presenceGate.sessionLocked(); });
+  powerMonitor.on('unlock-screen',()=>{ writeLog('SESSION_UNLOCKED'); presenceGate.sessionUnlocked(); });
   powerMonitor.on('resume',()=>{ clockMonitor.reset(); presenceGate.resumed(); });
   powerMonitor.on('suspend',()=>clockMonitor.reset());
 
