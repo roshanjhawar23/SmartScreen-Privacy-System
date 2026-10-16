@@ -102,6 +102,7 @@ def test_owner_face_path_end_to_end(tmp_path, monkeypatch):
     assert ":O:FACING_SCREEN:" in owner[0]
     assert owner[-1].split("|tracks=")[1].split(":")[8] == "L"  # head movement → LIVE
     assert any(line.startswith("STATS|fps=30.0|") for line in lines)
+    assert "LIVENESS|track=1|state=LIVE|reason=head-movement" in lines
     assert lines[-1] == "END|CAMERA_ERROR|The camera stopped delivering frames."
     assert not any(line.startswith("PHOTO_SAVED|") for line in lines)
 

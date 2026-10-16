@@ -58,12 +58,24 @@ def test_frozen_face_is_suspect_even_after_movement():
     assert t.reasons == ["frozen-face"]
 
 
-def test_screen_moire_is_suspect():
+def grating():
     yy, xx = np.mgrid[0:64, 0:64]
-    grating = (FACE.astype(float) + 40 * np.sin(xx * 2 * np.pi / 3.2) * np.sin(yy * 2 * np.pi / 3.7)).clip(0, 255).astype(np.uint8)
-    assert moire_score(grating) > moire_score(noisy(FACE)) * 3
-    states = feed(LivenessTracker(), 15, yaw=lambda i: 8 * np.sin(i), crop=lambda i: noisy(grating, 2))
+    return (FACE.astype(float) + 40 * np.sin(xx * 2 * np.pi / 3.2) * np.sin(yy * 2 * np.pi / 3.7)).clip(0, 255).astype(np.uint8)
+
+
+def test_screen_moire_is_suspect_when_enabled():
+    assert moire_score(grating()) > moire_score(noisy(FACE)) * 3
+    tracker = LivenessTracker(LivenessConfig(moire_enabled=True))
+    states = feed(tracker, 15, yaw=lambda i: 8 * np.sin(i), crop=lambda i: noisy(grating(), 2))
     assert states[-1] == SUSPECT
+
+
+def test_moire_is_off_by_default():
+    # Live check 2026-10-16: the cue flagged a real webcam face, so it is opt-in.
+    assert LivenessConfig().moire_enabled is False
+    states = feed(LivenessTracker(), 15, yaw=lambda i: 8 * np.sin(i), crop=lambda i: noisy(grating(), 2))
+    assert states[-1] == LIVE
+    assert LivenessConfig.from_dict({"moireEnabled": True}).moire_enabled is True
 
 
 def test_real_face_texture_is_not_moire():

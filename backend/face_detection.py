@@ -249,6 +249,8 @@ def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None
         started = time.perf_counter()
         obs = observe_frame(frame, detector, recognizer, owner_template, config, now)
         obs.tracks = face_tracker.update(now, obs.detections)
+        for track_id, state, reason in face_tracker.pop_liveness_changes():
+            emit(f"LIVENESS|track={track_id}|state={state}|reason={reason}")
         apply_track_identity(obs)
         stats.processed((time.perf_counter() - started) * 1000.0)
         event = tracker.update(now, obs)

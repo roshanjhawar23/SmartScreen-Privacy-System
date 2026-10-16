@@ -100,6 +100,12 @@ class FaceTracker:
     _tracks: list[_Track] = field(default_factory=list)
     _lost: list[_Track] = field(default_factory=list)
     _next_id: int = 1
+    _liveness_changes: list = field(default_factory=list)
+
+    def pop_liveness_changes(self) -> list[tuple[int, str, str]]:
+        """(track id, new state, reason) for every liveness change since the last call."""
+        changes, self._liveness_changes = self._liveness_changes, []
+        return changes
 
     def update(self, now: float, detections: list[Detection]) -> list[TrackView]:
         pairs = sorted(
@@ -157,7 +163,11 @@ class FaceTracker:
         if det.embedding is not None:
             track.embedding = det.embedding
         if det.liveness is not None and track.liveness is not None:
+            previous = track.liveness_state
             track.liveness_state = track.liveness.update(det.liveness)
+            if track.liveness_state != previous:
+                reason = ",".join(track.liveness.reasons) or "insufficient-evidence"
+                self._liveness_changes.append((track.id, track.liveness_state, reason))
         facing = det.facing == FACING_SCREEN
         looking = det.facing in (FACING_SCREEN, GLANCING)
         track.facing_since = (track.facing_since if track.facing_since is not None else now) if facing else None

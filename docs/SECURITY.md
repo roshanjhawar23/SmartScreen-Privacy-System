@@ -64,12 +64,14 @@ security boundary: SmartScreen may lock the session but never unlocks it or bypa
 ## Advanced security (Phase 3)
 ### Liveness — a heuristic, not anti-spoofing
 `backend/liveness.py` collects weak evidence per face track: LIVE needs a blink (eye regions briefly
-brighten and recover) or head movement beyond 6° of yaw/pitch; SUSPECT on a frozen face crop or on
-screen moiré in the face's spectrum. With `presenceGate.requireLiveness` (default on) the owner must
+brighten and recover) or head movement beyond 6° of yaw/pitch; SUSPECT on a frozen face crop. A
+screen-moiré cue exists but is **off by default** (`liveness.moireEnabled`): in the live check it
+flagged the owner's real face on this laptop's webcam within 0.8 s. Every liveness change is logged
+with its reason (`LIVENESS|track=…|state=…|reason=…`). With `presenceGate.requireLiveness` (default on) the owner must
 be LIVE before the screen is revealed; missing liveness data counts as not verified.
 - **Stops:** a printed or phone photo held still or on a stand, frozen images, static virtual-camera feeds.
-- **Does not reliably stop:** a hand-held photo that is tilted (it produces head-movement), a replayed
-  video, a 3D mask. Moiré detection depends on distance, display and camera; it is not dependable.
+- **Does not stop:** a hand-held photo that is tilted (it produces head-movement), a replayed video
+  shown on a phone or monitor (moiré is off), a 3D mask.
 - Landmark jitter limits all of this: thresholds sit above the jitter measured on synthetic data, so a
   very still real person may stay UNKNOWN until they move or blink.
 

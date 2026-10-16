@@ -1007,6 +1007,8 @@ function startAI(){
       lastIntruderImage=msg.split('|').slice(1).join('|') || '';
       writeLog(msg);
       win.webContents.send('ai-photo-saved',{path:lastIntruderImage});
+    }else if(msg.startsWith('LIVENESS|')){
+      writeLog(msg.slice(0, 120));
     }else if(msg.startsWith('STATS|')){
       diagnostics.setBackendStats(parseStatsMessage(msg));
     }else if(msg.startsWith('TAMPER|')){

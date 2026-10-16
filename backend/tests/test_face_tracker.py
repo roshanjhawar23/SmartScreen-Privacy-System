@@ -129,3 +129,5 @@ def test_liveness_is_tracked_per_face():
         view = t.update(i * 0.1, [d])[0]
     assert view.liveness == "LIVE"
     assert view.encode().endswith(":L:0.150")
+    assert t.pop_liveness_changes() == [(1, "LIVE", "head-movement")]
+    assert t.pop_liveness_changes() == []

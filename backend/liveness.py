@@ -9,7 +9,9 @@ LIVE (latched for the life of the track) needs positive evidence of a living fac
     the pose jitter caused by landmark noise.
 SUSPECT on a spoof cue:
   - frozen face: the face crop stays nearly identical (below camera sensor noise); or
-  - screen texture: strong isolated peaks in the face crop's spectrum (moiré from a display).
+  - screen texture (opt-in, ``moire_enabled``): strong isolated peaks in the face crop's spectrum.
+    Off by default: in the 2026-10-16 live check it flagged a real face on the webcam within
+    0.8 s (compression patterns), which blocked the owner.
 UNKNOWN until there is enough evidence either way.
 
 It stops a photo on a stand and frozen or still images. It does NOT reliably stop a
@@ -36,6 +38,7 @@ class LivenessConfig:
     blink_max_s: float = 0.6       # a blink must recover within this time
     frozen_diff: float = 0.35      # mean abs diff (0–255) of 32×32 face crops below = frozen
     frozen_s: float = 2.0
+    moire_enabled: bool = False    # opt-in: false positives on real webcams (see module docstring)
     moire_ratio: float = 14.0      # spectral peak / median in the mid-high band
     moire_share: float = 0.6       # share of recent samples that must show the peak
 
@@ -50,6 +53,8 @@ class LivenessConfig:
                     values[attr] = float(raw[key])
             except (TypeError, ValueError):
                 pass
+        if raw and isinstance(raw.get("moireEnabled"), bool):
+            values["moire_enabled"] = raw["moireEnabled"]
         return cls(**values)
 
 
@@ -116,7 +121,7 @@ class LivenessTracker:
             self.reasons = ["frozen-face"]
             return SUSPECT
 
-        crops = [x.crop for x in self.samples if x.crop is not None]
+        crops = [x.crop for x in self.samples if x.crop is not None] if c.moire_enabled else []
         if len(crops) >= 5:
             recent = crops[-8:]
             share = sum(moire_score(cr) >= c.moire_ratio for cr in recent) / len(recent)
