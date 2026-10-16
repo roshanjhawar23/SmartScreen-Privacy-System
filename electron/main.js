@@ -59,6 +59,8 @@ let lastAIHeartbeat = 0;     // monotonic ms (performance.now): immune to system
 let aiWatchdog = null;
 let aiFailureReported = false;
 let lastAIState = null;       // AI_STATE is logged on change only (the backend re-emits ~400 ms)
+let lastPoseKey = '';         // AI_POSE / AI_LIVENESS are logged on change of class only
+let lastLivenessKey = '';
 let curtainState = { on:false, effect:'blackout' };
 let contentProtected = false;
 let trayStatus = { icon:'icon-gray.png', tooltip:'SmartScreen Privacy Suite' };
@@ -797,6 +799,24 @@ const presenceGate = createPresenceGate({
   }
 });
 
+// Low-volume pose/liveness trail for explanations and live checks: one line per change of
+// facing class or of any track's liveness, never per frame.
+function logPoseAndLiveness(payload){
+  if(payload.facing){
+    const key = payload.facing;
+    if(key !== lastPoseKey){
+      lastPoseKey = key;
+      writeLog(`AI_POSE|facing=${payload.facing}|yaw=${Number(payload.yaw || 0).toFixed(0)}|pitch=${Number(payload.pitch || 0).toFixed(0)}`);
+    }
+  }
+  const tracks = payload.tracks || [];
+  const liveKey = tracks.map((t) => `${t.role}:${t.liveness}`).join(',');
+  if(liveKey && liveKey !== lastLivenessKey){
+    lastLivenessKey = liveKey;
+    writeLog(`AI_LIVENESS|${liveKey}`);
+  }
+}
+
 function sendAIState(payload){
   if(!win || win.isDestroyed()) return;
   win.webContents.send('ai-state', payload);
@@ -882,6 +902,8 @@ ipcMain.on('retry-protection',()=>{
 function startAI(){
   aiFailureReported = false;
   lastAIState = null;
+  lastPoseKey = '';
+  lastLivenessKey = '';
 
   let template;
   try{
@@ -978,6 +1000,7 @@ function startAI(){
       lastAIHeartbeat = performance.now();
       const payload = parseStateMessage(msg);
       if(payload.state !== lastAIState) writeLog(`AI_STATE|${msg}`);
+      logPoseAndLiveness(payload);
       lastAIState = payload.state;
       sendAIState(payload);
     }else if(msg.startsWith('PHOTO_SAVED|')){
