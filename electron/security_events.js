@@ -34,6 +34,7 @@ function describeEvent(raw){
   if(raw.startsWith('THREAT_LOCK_TIMER_EXPIRED')) return { type:'ACTION', title:'Threat lock timer expired' };
   if(raw.startsWith('LOCK_REQUESTED|')) return { type:'ACTION', title:'Screen lock requested', detail:field(raw,1,'reason=') };
   if(raw.startsWith('LOCK_COMMAND_COMPLETED|')) return { type:'ACTION', title:'Screen locked', detail:field(raw,1,'reason=') };
+  if(raw.startsWith('TEST_LOCK_SIMULATED|')) return { type:'ACTION', title:'Screen lock simulated (test mode)', detail:field(raw,1,'reason=') };
   if(raw.startsWith('LOCK_ERROR|')) return { type:'ERROR', title:'Screen lock failed' };
   if(raw === 'AI_READY') return { type:'SYSTEM', title:'Privacy recognition service ready' };
   if(raw.startsWith('AI_ERROR|CAMERA_ERROR')) return { type:'ERROR', title:'Camera unavailable' };

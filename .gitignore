@@ -31,3 +31,9 @@ activity.log
 backend/dist/
 backend/build/
 .pytest_cache/
+
+# Self-test harness: private webcam fixtures and e2e output (never commit)
+tests/fixtures/private/
+tests/e2e/artifacts/
+test-results/
+playwright-report/

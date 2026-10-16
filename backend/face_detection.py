@@ -9,6 +9,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 
+from camera_source import WEBCAM, FileCameraSource, resolve_camera_source
 from monitor_core import (
     CameraHealth,
     Emitter,
@@ -72,6 +73,8 @@ def parse_config(raw: dict) -> dict:
     config["noUserDetectionDelay"] = max(0.5, float(config.get("noUserDetectionDelay", 1.5)))
     config["cameraFailureTimeout"] = max(0.5, float(config.get("cameraFailureTimeout", CAMERA_FAILURE_TIMEOUT)))
     config["logDir"] = str(config.get("logDir") or default_log_dir())
+    # Test-only: ignored (always "webcam") unless SMARTSCREEN_TEST=1.
+    config["cameraSource"] = resolve_camera_source(config.get("cameraSource"))
     return config
 
 
@@ -223,7 +226,13 @@ def main() -> None:
     config = read_startup_config()
     detector, recognizer = create_models(args.detector, args.recognizer, config["detectionThreshold"])
 
-    camera = open_camera()
+    if config["cameraSource"] == WEBCAM:
+        camera = open_camera()
+    else:
+        try:
+            camera = FileCameraSource(config["cameraSource"], cv2)
+        except FileNotFoundError as exc:
+            raise CameraError(f"CAMERA_ERROR|{exc}") from exc
     if camera is None:
         raise CameraError("CAMERA_ERROR|No accessible camera was found.")
 

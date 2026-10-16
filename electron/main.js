@@ -9,6 +9,13 @@ const { createLineSplitter, parseStateMessage, parseErrorMessage } = require('./
 const { createProtectionSequence } = require('./protection_sequence');
 const { planOverlayWindows } = require('./display_layout');
 const { clampLevel } = require('../frontend/intensity');
+const { createScreenLocker, isTestMode } = require('./screen_lock');
+
+// Self-test harness only (SMARTSCREEN_TEST=1): isolated profile and a recorded camera source.
+const TEST_MODE = isTestMode();
+if(TEST_MODE && process.env.SMARTSCREEN_USER_DATA){
+  app.setPath('userData', path.resolve(process.env.SMARTSCREEN_USER_DATA));
+}
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if(!gotSingleInstanceLock){
@@ -54,6 +61,13 @@ function loadSettings(){
   }catch(err){
     console.error('Failed to load settings:', err);
     settings = {};
+  }
+  if(TEST_MODE && process.env.SMARTSCREEN_TEST_SETTINGS){
+    try{
+      settings = { ...settings, ...JSON.parse(process.env.SMARTSCREEN_TEST_SETTINGS) };
+    }catch(err){
+      console.error('Invalid SMARTSCREEN_TEST_SETTINGS:', err);
+    }
   }
 }
 
@@ -533,18 +547,11 @@ function sendPrivacyAction(action, reason='state-change'){
   win.webContents.send('privacy-action', { action, reason });
 }
 
-function lockScreen(reason='manual'){
-  writeLog(`LOCK_REQUESTED|reason=${reason}`);
-  exec('rundll32.exe user32.dll,LockWorkStation', (error, stdout, stderr) => {
-    if(error){
-      writeLog(`LOCK_ERROR|reason=${reason}|${error.message}`);
-      console.error('WINDOWS LOCK ERROR:', error.message);
-      return;
-    }
-    if(stderr?.trim()) writeLog(`LOCK_STDERR|reason=${reason}|${stderr.trim()}`);
-    writeLog(`LOCK_COMMAND_COMPLETED|reason=${reason}`);
-  });
-}
+const lockScreen = createScreenLocker({
+  exec,
+  log:writeLog,
+  onError:(error)=>console.error('WINDOWS LOCK ERROR:', error.message)
+});
 
 const protection = createProtectionSequence({
   getSettings:()=>settings,
@@ -682,6 +689,11 @@ ipcMain.on('start-ai',()=>{
     cameraFailureTimeout: Math.max(0.5, Number(settings.cameraFailureTimeout ?? 3)),
     logDir: logPath
   };
+  // The backend ignores cameraSource unless SMARTSCREEN_TEST=1 is set too.
+  if(TEST_MODE && process.env.SMARTSCREEN_CAMERA_SOURCE){
+    config.cameraSource = process.env.SMARTSCREEN_CAMERA_SOURCE;
+    writeLog(`TEST_CAMERA_SOURCE|${path.basename(config.cameraSource)}`);
+  }
 
   const isCurrent = () => pythonProcess === child;
 
@@ -811,6 +823,7 @@ function runRuntimeHealthCheck(){
 app.whenReady().then(()=>{
   configureCameraPermissions();
   loadSettings();
+  if(TEST_MODE) writeLog('TEST_MODE_ACTIVE');
   runRuntimeHealthCheck();
 
   for(const eventName of ['display-added','display-removed','display-metrics-changed']){

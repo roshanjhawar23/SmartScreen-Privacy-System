@@ -53,12 +53,14 @@ test('classifies event types', () => {
     ['BIOMETRIC_ENROLLED|samples=5', 'IDENTITY'],
     ['AI_ERROR|CAMERA_ERROR|The camera stopped delivering frames.', 'ERROR'],
     ['AI_WATCHDOG_TIMEOUT', 'ERROR'],
-    ['PHOTO_SAVED|C:\\x.jpg', 'EVIDENCE']
+    ['PHOTO_SAVED|C:\\x.jpg', 'EVIDENCE'],
+    ['TEST_LOCK_SIMULATED|reason=walk-away', 'ACTION']
   ];
   for (const [raw, type] of cases) {
     assert.equal(parseLogLine(`2026-10-01T10:00:00.000Z - ${raw}`).type, type, raw);
   }
   assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - AI_ERROR|CAMERA_ERROR|x').title, 'Camera unavailable');
+  assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - TEST_LOCK_SIMULATED|reason=walk-away').title, 'Screen lock simulated (test mode)');
 });
 
 test('log values cannot inject extra lines', () => {

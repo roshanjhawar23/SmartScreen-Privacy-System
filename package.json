@@ -10,9 +10,11 @@
     "test:py": "python -m pytest backend/tests -q",
     "test:all": "npm test && npm run test:py",
     "test:state": "node tests/privacy_state.test.js",
-    "health": "node scripts/runtime_health.js"
+    "health": "node scripts/runtime_health.js",
+    "test:e2e": "playwright test -c tests/e2e"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "electron": "^28.0.0",
     "electron-builder": "^24.13.3"
   },
