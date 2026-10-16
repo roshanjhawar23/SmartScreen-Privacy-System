@@ -20,3 +20,14 @@ device_profile.json
 # SmartScreen local/runtime data
 Intruder_Logs/
 *.backup*
+
+# Runtime data that must never be committed (any case; Windows git may be case-sensitive)
+intruder_logs/
+[Ii]ntruder_[Ll]ogs/
+logs/
+biometric/
+*.enc
+activity.log
+backend/dist/
+backend/build/
+.pytest_cache/

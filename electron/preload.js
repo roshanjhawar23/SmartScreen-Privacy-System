@@ -1,6 +1,14 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+const roleArg = process.argv.find((arg) => arg.startsWith('--smartscreen-role='));
+const overlayRole = roleArg === '--smartscreen-role=secondary' ? 'secondary' : 'primary';
+
 contextBridge.exposeInMainWorld('electronAPI', {
+  overlayRole,
+  publishRenderState:(state)=>ipcRenderer.send('overlay-render-state',state),
+  onRenderState:(cb)=>ipcRenderer.on('overlay-render-state',(_,data)=>cb(data)),
+  getCaptureSource:()=>ipcRenderer.invoke('get-capture-source'),
+
   setIgnoreMouse:(v)=>ipcRenderer.send('set-ignore-mouse',v),
 
   onHotkeyBlur:(cb)=>ipcRenderer.on('hotkey-blur',cb),

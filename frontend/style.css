@@ -24,15 +24,10 @@ html,body{
 }
 
 #overlay,#pixelateLayer,#blackoutLayer,#focusLayer,#vignetteLayer{position:fixed;inset:0;pointer-events:none}
-#overlay{background:rgba(255,255,255,.2);backdrop-filter:blur(15px);opacity:0;transition:opacity .2s ease}
-#pixelateLayer{
-  background-color:rgba(18,20,24,.72);
-  background-image:linear-gradient(rgba(255,255,255,.10) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.10) 1px,transparent 1px);
-  background-size:12px 12px;
-  backdrop-filter:blur(8px) saturate(.7);
-  opacity:0;
-  transition:opacity .2s ease,background-size .12s ease
-}
+#overlay{background:rgba(0,0,0,.25);backdrop-filter:blur(17px);opacity:0;transition:opacity .2s ease}
+/* Opaque cover: shown before the first captured frame and whenever capture fails. */
+#pixelateLayer{background:#101215;opacity:0;transition:opacity .12s ease}
+#pixelateCanvas{position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated;visibility:hidden}
 #blackoutLayer{background:rgba(0,0,0,.94);opacity:0;transition:opacity .2s ease}
 #focusLayer{background:radial-gradient(circle 120px at center,transparent 0,rgba(0,0,0,.76) 150px);opacity:0;transition:opacity .18s ease}
 #vignetteLayer{background:radial-gradient(circle at center,rgba(0,0,0,0) 40%,rgba(0,0,0,.62) 85%);opacity:0;transition:opacity .2s ease}
@@ -54,7 +49,9 @@ html,body{
   pointer-events:auto;
 }
 
-#panelHeader{display:flex;align-items:center;gap:8px}
+#panelHeader{display:flex;align-items:center;gap:8px;cursor:grab;user-select:none;touch-action:none}
+#panelHeader.is-dragging{cursor:grabbing}
+body.secondary-overlay #control,body.secondary-overlay #aiWarning{display:none!important}
 #miniToggle{
   width:28px;height:28px;padding:0;border:1px solid var(--line-soft);border-radius:7px;
   background:#24272c;color:#f3f5f8;font:700 16px/1 "Segoe UI",sans-serif;cursor:pointer;
@@ -101,7 +98,7 @@ html,body{
 .mini-effect{width:54px;height:25px!important;font-size:9px!important}
 .effect-control{display:flex;flex-direction:column;gap:4px}
 .effect-control-head{display:flex;justify-content:space-between;align-items:center;color:#bcc3cb;font-size:8px}
-.effect-control input{width:100%;height:14px;margin:0;accent-color:var(--accent)}
+.effect-control input{width:100%;height:14px;margin:0;accent-color:var(--accent);touch-action:none}
 
 .event-row{border-top:1px solid var(--line);padding-top:7px}
 .event-list{display:flex;flex-direction:column;gap:3px;margin-top:5px;max-height:32px;overflow:hidden}

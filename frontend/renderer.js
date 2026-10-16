@@ -1,5 +1,21 @@
 const PrivacyState = window.SmartScreenPrivacyState;
+const Intensity = window.SmartScreenIntensity;
 const STATES = PrivacyState.STATES;
+const isSecondaryOverlay = window.electronAPI.overlayRole === 'secondary';
+
+// Secondary displays only mirror the primary window's render state.
+if (isSecondaryOverlay) {
+  document.body.classList.add('secondary-overlay');
+  // Cursor is usually on another display: darken everything until it arrives.
+  const effects = window.SmartScreenEffects.create({ api: window.electronAPI, initialPointer: { x: -10000, y: -10000 } });
+  window.electronAPI.onRenderState((state) => effects.apply(state));
+} else {
+  startPrimaryOverlay();
+}
+
+function startPrimaryOverlay() {
+const effects = window.SmartScreenEffects.create({ api: window.electronAPI });
+const INTENSITY_STORAGE_KEY = 'smartscreen.privacyIntensity';
 
 let blurOn = false;
 let pixelateOn = false;
@@ -16,6 +32,7 @@ let normalCooldown = null;
 let notificationTimer = null;
 let automaticBlurOn = false;
 let automaticFocusOn = false;
+let intensityLevel = loadIntensity();
 let appSettings = {
   noUserLockEnabled: true,
   walkAwayLockDelay: 6000,
@@ -24,11 +41,7 @@ let appSettings = {
 };
 
 const control = document.getElementById('control');
-const overlay = document.getElementById('overlay');
-const pixelateLayer = document.getElementById('pixelateLayer');
-const blackoutLayer = document.getElementById('blackoutLayer');
-const focusLayer = document.getElementById('focusLayer');
-const vignetteLayer = document.getElementById('vignetteLayer');
+const panelHeader = document.getElementById('panelHeader');
 const aiWarning = document.getElementById('aiWarning');
 const aiStatus = document.getElementById('ai-status');
 const identityLive = document.getElementById('identity-live');
@@ -46,14 +59,20 @@ const focusBtn = document.getElementById('focusBtn');
 const vignetteBtn = document.getElementById('vignetteBtn');
 const focusValue = document.getElementById('focusValue');
 const vignetteValue = document.getElementById('vignetteValue');
-const blurStrength = document.getElementById('blurStrength');
-const blurStrengthValue = document.getElementById('blurStrengthValue');
-const focusIntensity = document.getElementById('focusIntensity');
-const focusIntensityValue = document.getElementById('focusIntensityValue');
-const pixelateStrength = document.getElementById('pixelateStrength');
-const pixelateValue = document.getElementById('pixelateValue');
-const blackoutOpacity = document.getElementById('blackoutOpacity');
-const blackoutValue = document.getElementById('blackoutValue');
+const intensitySlider = document.getElementById('intensitySlider');
+const intensityValue = document.getElementById('intensityValue');
+
+function loadIntensity() {
+  try {
+    const stored = window.localStorage.getItem(INTENSITY_STORAGE_KEY);
+    if (stored !== null) return Intensity.clampLevel(stored);
+  } catch {}
+  return Intensity.DEFAULT_LEVEL;
+}
+
+function saveIntensity(level) {
+  try { window.localStorage.setItem(INTENSITY_STORAGE_KEY, String(level)); } catch {}
+}
 
 function setStatus(text) {
   if (aiStatus) aiStatus.textContent = text;
@@ -101,21 +120,28 @@ function updateButtonState(button, active) {
   button.setAttribute('aria-pressed', String(Boolean(active)));
 }
 
+function currentRenderState() {
+  return {
+    blur: blurOn || automaticBlurOn,
+    pixelate: pixelateOn,
+    blackout: blackoutOn,
+    focus: focusOn || automaticFocusOn,
+    vignette: vignetteOn,
+    level: intensityLevel
+  };
+}
+
 function renderProtectionLayers() {
-  overlay.style.opacity = (blurOn || automaticBlurOn) ? '1' : '0';
-  pixelateLayer.style.opacity = pixelateOn ? '1' : '0';
-  blackoutLayer.style.opacity = blackoutOn ? String((Number(blackoutOpacity?.value || 94)) / 100) : '0';
-  focusLayer.style.opacity = (focusOn || automaticFocusOn) ? '1' : '0';
-  if (pixelateLayer) {
-    const block = Math.max(6, Math.min(32, Number(pixelateStrength?.value || 12)));
-    pixelateLayer.style.backgroundSize = `${block}px ${block}px`;
-  }
-  if (focusOn || automaticFocusOn) applyFocusGradient();
+  const state = currentRenderState();
+  effects.apply(state);
+  window.electronAPI.publishRenderState(state);
   updateButtonState(blurBtn, blurOn);
   updateButtonState(pixelateBtn, pixelateOn);
   updateButtonState(blackoutBtn, blackoutOn);
   updateButtonState(focusBtn, focusOn);
   updateButtonState(vignetteBtn, vignetteOn);
+  if (focusValue) focusValue.textContent = focusOn ? 'On' : 'Off';
+  if (vignetteValue) vignetteValue.textContent = vignetteOn ? 'On' : 'Off';
 }
 
 function setBlur(enabled) {
@@ -137,7 +163,11 @@ function setBlackout(enabled) {
 
 function setFocus(enabled) {
   focusOn = Boolean(enabled);
-  if (focusValue) focusValue.textContent = focusOn ? 'On' : 'Off';
+  renderProtectionLayers();
+}
+
+function setVignette(enabled) {
+  vignetteOn = Boolean(enabled);
   renderProtectionLayers();
 }
 
@@ -157,36 +187,11 @@ function clearAutomaticProtection() {
   renderProtectionLayers();
 }
 
-function setVignette(enabled) {
-  vignetteOn = Boolean(enabled);
-  if (vignetteValue) vignetteValue.textContent = vignetteOn ? 'On' : 'Off';
-  vignetteLayer.style.opacity = vignetteOn ? '1' : '0';
-}
-
-function updatePixelateStrength(){
-  const value = Math.max(6, Math.min(32, Number(pixelateStrength?.value || 12)));
-  if (pixelateValue) pixelateValue.textContent = `${value} px`;
-  if (pixelateLayer) pixelateLayer.style.backgroundSize = `${value}px ${value}px`;
-}
-
-function updateBlackoutOpacity(){
-  const value = Math.max(70, Math.min(100, Number(blackoutOpacity?.value || 94)));
-  if (blackoutValue) blackoutValue.textContent = `${value}%`;
-  if (blackoutOn && blackoutLayer) blackoutLayer.style.opacity = String(value / 100);
-}
-
-function updateBlurStrength(){
-  const value = Math.max(4, Number(blurStrength?.value || 15));
-  overlay.style.backdropFilter = `blur(${value}px)`;
-  overlay.style.webkitBackdropFilter = `blur(${value}px)`;
-  if (blurStrengthValue) blurStrengthValue.textContent = `${value} px`;
-}
-
-function updateFocusIntensity(){
-  const value = Math.min(95, Math.max(20, Number(focusIntensity?.value || 76)));
-  const alpha = (value / 100).toFixed(2);
-  focusLayer.style.background = `radial-gradient(circle 120px at ${mouseX}px ${mouseY}px, transparent 0, rgba(0,0,0,${alpha}) 150px)`;
-  if (focusIntensityValue) focusIntensityValue.textContent = `${value}%`;
+function setIntensity(level) {
+  intensityLevel = Intensity.clampLevel(level);
+  if (intensitySlider && Number(intensitySlider.value) !== intensityLevel) intensitySlider.value = String(intensityLevel);
+  if (intensityValue) intensityValue.textContent = String(intensityLevel);
+  renderProtectionLayers();
 }
 
 function toggleBlur() {
@@ -281,6 +286,7 @@ function applyState(payload) {
 
     case STATES.AI_UNAVAILABLE:
       clearAllTimers();
+      // KNOWN DEFECT (Phase 1.5 Presence Gate fixes this): failing open.
       clearAutomaticProtection();
       setStatus('Protection unavailable');
       setLiveIdentity('Verification unavailable');
@@ -308,10 +314,42 @@ window.addEventListener('error', () => {
   if (aiWarning) aiWarning.style.opacity = '0';
 });
 
-if (control) {
-  control.addEventListener('mouseenter', () => window.electronAPI.setIgnoreMouse(false));
-  control.addEventListener('mouseleave', () => window.electronAPI.setIgnoreMouse(true));
+// Click-through management. The overlay ignores the mouse except over the panel.
+// While a pointer gesture (panel drag or slider drag) is in progress we must not
+// switch back to click-through, or the gesture is cut off when the pointer leaves
+// the panel.
+let pointerOverPanel = false;
+let pointerGestureActive = false;
+
+function updateMouseCapture() {
+  window.electronAPI.setIgnoreMouse(!(pointerOverPanel || pointerGestureActive));
 }
+
+function beginPointerGesture(event, target) {
+  pointerGestureActive = true;
+  try { target.setPointerCapture(event.pointerId); } catch {}
+  updateMouseCapture();
+}
+
+function endPointerGesture(event) {
+  if (!pointerGestureActive) return;
+  pointerGestureActive = false;
+  pointerOverPanel = control ? control.contains(document.elementFromPoint(event.clientX, event.clientY)) : false;
+  updateMouseCapture();
+}
+
+if (control) {
+  control.addEventListener('pointerenter', () => { pointerOverPanel = true; updateMouseCapture(); });
+  control.addEventListener('pointerleave', () => { pointerOverPanel = false; updateMouseCapture(); });
+}
+
+intensitySlider?.addEventListener('pointerdown', (event) => beginPointerGesture(event, intensitySlider));
+intensitySlider?.addEventListener('pointerup', endPointerGesture);
+intensitySlider?.addEventListener('pointercancel', endPointerGesture);
+intensitySlider?.addEventListener('input', () => {
+  setIntensity(intensitySlider.value);
+  saveIntensity(intensityLevel);
+});
 
 blurBtn?.addEventListener('click', toggleBlur);
 focusBtn?.addEventListener('click', toggleFocus);
@@ -324,10 +362,6 @@ effectsBtn?.addEventListener('click', () => {
   if (effectsPanel) effectsPanel.hidden = open;
   effectsBtn?.setAttribute('aria-expanded', String(!open));
 });
-blurStrength?.addEventListener('input', updateBlurStrength);
-pixelateStrength?.addEventListener('input', () => { updatePixelateStrength(); renderProtectionLayers(); });
-blackoutOpacity?.addEventListener('input', () => { updateBlackoutOpacity(); renderProtectionLayers(); });
-focusIntensity?.addEventListener('input', () => { updateFocusIntensity(); if (focusOn || automaticFocusOn) applyFocusGradient(); });
 
 async function toggleAI() {
   if (aiEnabled) {
@@ -363,28 +397,12 @@ async function toggleAI() {
 
 aiBtn?.addEventListener('click', toggleAI);
 
-let mouseX = window.innerWidth / 2;
-let mouseY = window.innerHeight / 2;
-
-function applyFocusGradient() {
-  const value = Math.min(95, Math.max(20, Number(focusIntensity?.value || 76)));
-  const alpha = (value / 100).toFixed(2);
-  focusLayer.style.background = `radial-gradient(circle 120px at ${mouseX}px ${mouseY}px, transparent 0px, rgba(0,0,0,${alpha}) 150px)`;
-  if (focusIntensityValue) focusIntensityValue.textContent = `${value}%`;
-}
-
-document.addEventListener('mousemove', (event) => {
-  mouseX = event.clientX;
-  mouseY = event.clientY;
-  if (focusOn) applyFocusGradient();
-});
-
 window.electronAPI.onHotkeyBlur(() => toggleBlur());
 window.electronAPI.onHotkeyFocus(() => toggleFocus());
 window.electronAPI.onHotkeyVignette(() => toggleVignette());
 
 window.electronAPI.onWalkAwayStatus((data) => {
-  refreshSecurityEvents();
+  if (data?.phase !== 'COUNTDOWN') refreshSecurityEvents();
   if (!aiEnabled) return;
   const remainingMs = Math.max(0, Number(data?.remainingMs || 0));
   const seconds = Math.ceil(remainingMs / 1000);
@@ -457,27 +475,39 @@ window.electronAPI.onAIStopped(() => {
 
 window.electronAPI.onAIPhotoSaved(() => {});
 
+// Panel dragging: only from the header (not the slider or buttons), with pointer
+// capture so the drag keeps tracking outside the panel.
 let dragging = false;
 let offsetX = 0;
 let offsetY = 0;
 
-control?.addEventListener('mousedown', (event) => {
-  if (event.target.closest('button')) return;
+panelHeader?.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || event.target.closest('button, input, select')) return;
   dragging = true;
   offsetX = event.clientX - control.offsetLeft;
   offsetY = event.clientY - control.offsetTop;
+  panelHeader.classList.add('is-dragging');
+  beginPointerGesture(event, panelHeader);
 });
 
-document.addEventListener('mousemove', (event) => {
+panelHeader?.addEventListener('pointermove', (event) => {
   if (!dragging) return;
-  control.style.left = `${event.clientX - offsetX}px`;
-  control.style.top = `${event.clientY - offsetY}px`;
+  const maxLeft = Math.max(0, window.innerWidth - control.offsetWidth);
+  const maxTop = Math.max(0, window.innerHeight - control.offsetHeight);
+  control.style.left = `${Math.min(maxLeft, Math.max(0, event.clientX - offsetX))}px`;
+  control.style.top = `${Math.min(maxTop, Math.max(0, event.clientY - offsetY))}px`;
   control.style.right = 'auto';
 });
 
-document.addEventListener('mouseup', () => {
+function endDrag(event) {
+  if (!dragging) return;
   dragging = false;
-});
+  panelHeader.classList.remove('is-dragging');
+  endPointerGesture(event);
+}
+
+panelHeader?.addEventListener('pointerup', endDrag);
+panelHeader?.addEventListener('pointercancel', endDrag);
 
 let collapsed = false;
 mini?.addEventListener('click', (event) => {
@@ -554,18 +584,14 @@ identityBtn?.addEventListener('click', async () => {
   }
 });
 
-window.electronAPI.onBiometricUpdated((_event, status) => {
-  if (status?.enrolled) updateBlurStrength();
-updatePixelateStrength();
-updateBlackoutOpacity();
-updateFocusIntensity();
+window.electronAPI.onBiometricUpdated(() => {
+  refreshBiometricStatus();
+  refreshSecurityEvents();
+});
+
+// Startup — runs exactly once.
+setIntensity(intensityLevel);
 refreshBiometricStatus();
 refreshSecurityEvents();
 setInterval(() => { if (aiEnabled) refreshSecurityEvents(); }, 5000);
-});
-
-updateBlurStrength();
-updatePixelateStrength();
-updateBlackoutOpacity();
-updateFocusIntensity();
-refreshBiometricStatus();
+}

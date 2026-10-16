@@ -9,7 +9,7 @@
 </head>
 <body>
   <div id="overlay"></div>
-  <div id="pixelateLayer"></div>
+  <div id="pixelateLayer"><canvas id="pixelateCanvas" width="1" height="1"></canvas></div>
   <div id="blackoutLayer"></div>
   <div id="focusLayer"></div>
   <div id="vignetteLayer"></div>
@@ -47,7 +47,7 @@
         <div class="effect-row">
           <div>
             <span class="effect-name">Focus</span>
-            <span class="effect-value" id="focusValue">Active manually</span>
+            <span class="effect-value" id="focusValue">Off</span>
           </div>
           <button id="focusBtn" class="mini-effect" type="button">Toggle</button>
         </div>
@@ -59,20 +59,8 @@
           <button id="vignetteBtn" class="mini-effect" type="button">Toggle</button>
         </div>
         <div class="effect-control">
-          <div class="effect-control-head"><span>Pixel block size</span><span id="pixelateValue">12 px</span></div>
-          <input id="pixelateStrength" type="range" min="6" max="32" value="12">
-        </div>
-        <div class="effect-control">
-          <div class="effect-control-head"><span>Blackout opacity</span><span id="blackoutValue">94%</span></div>
-          <input id="blackoutOpacity" type="range" min="70" max="100" value="94">
-        </div>
-        <div class="effect-control">
-          <div class="effect-control-head"><span>Blur strength</span><span id="blurStrengthValue">15 px</span></div>
-          <input id="blurStrength" type="range" min="4" max="30" value="15">
-        </div>
-        <div class="effect-control">
-          <div class="effect-control-head"><span>Focus intensity</span><span id="focusIntensityValue">76%</span></div>
-          <input id="focusIntensity" type="range" min="20" max="95" value="76">
+          <div class="effect-control-head"><span>Privacy intensity</span><span id="intensityValue">50</span></div>
+          <input id="intensitySlider" type="range" min="0" max="100" step="1" value="50" aria-label="Privacy intensity">
         </div>
       </div>
 
@@ -89,6 +77,8 @@
 
   <div id="aiWarning">Privacy protection triggered</div>
   <script src="privacy_state.js"></script>
+  <script src="intensity.js"></script>
+  <script src="overlay_effects.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

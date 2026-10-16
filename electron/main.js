@@ -1,9 +1,14 @@
-const { app, BrowserWindow, globalShortcut, ipcMain, Tray, Menu, dialog, session, safeStorage } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, Tray, Menu, dialog, session, safeStorage, screen, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
 const { isConfigured, createProfile, readProfile, markBiometricEnrolled } = require('./device_profile');
 const { saveTemplate, readTemplate } = require('./biometric_store');
+const { formatLogLine, readSecurityEvents } = require('./security_events');
+const { createLineSplitter, parseStateMessage, parseErrorMessage } = require('./ai_protocol');
+const { createProtectionSequence } = require('./protection_sequence');
+const { planOverlayWindows } = require('./display_layout');
+const { clampLevel } = require('../frontend/intensity');
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if(!gotSingleInstanceLock){
@@ -14,7 +19,10 @@ if(!gotSingleInstanceLock){
 let logDir;
 let logFile;
 let settings = {};
-let win = null;
+let win = null;               // primary overlay window (hosts the control panel)
+let winDisplayId = null;      // display the primary overlay currently covers
+const secondaryWindows = new Map(); // BrowserWindow.id -> { window, displayId }
+let lastRenderState = null;
 let setupWindow = null;
 let enrollmentWindow = null;
 let tray = null;
@@ -24,90 +32,19 @@ let pythonProcess = null;
 let lastIntruderImage = '';
 let lastAIHeartbeat = 0;
 let aiWatchdog = null;
-let walkAwayTimer = null;
-let walkAwayCountdownTimer = null;
-let walkAwayFocusTimer = null;
-let threatLockTimer = null;
-let threatFocusTimer = null;
-let walkAwayDeadline = 0;
-let activeProtectionSequence = null;
+let aiFailureReported = false;
 
 function writeLog(event){
-
-function readSecurityEvents(limit=20){
-  const file = logFile || path.join(app.getPath('userData'),'logs','activity.log');
-  if(!fs.existsSync(file)) return [];
-
-  const lines = fs.readFileSync(file,'utf8').split(/\r?\n/).filter(Boolean);
-  const events = [];
-
-  for(let i=lines.length-1;i>=0 && events.length<Math.max(1,Number(limit)||20);i--){
-    const line = lines[i];
-    const match = line.match(/^(\d{4}-\d{2}-\d{2}T[^ ]+) - (.+)$/);
-    if(!match) continue;
-
-    const timestamp = match[1];
-    const raw = match[2];
-    let type = 'SYSTEM';
-    let title = raw;
-    let detail = '';
-
-    if(raw === 'DEVICE_SETUP_COMPLETE'){
-      type='SETUP'; title='Device setup completed';
-    }else if(raw.startsWith('BIOMETRIC_ENROLLED|')){
-      type='IDENTITY'; title='Owner identity enrolled';
-      detail = raw.split('|')[1]?.replace('samples=','') || '';
-    }else if(raw.startsWith('AI_STATE|STATE|OWNER_PRESENT')){
-      type='IDENTITY'; title='Owner verified';
-    }else if(raw.startsWith('AI_STATE|STATE|NO_USER')){
-      type='PRESENCE'; title='No person detected';
-    }else if(raw.startsWith('AI_STATE|STATE|UNKNOWN_PERSON')){
-      type='THREAT'; title='Unrecognized person detected';
-    }else if(raw.startsWith('AI_STATE|STATE|UNKNOWN_GROUP')){
-      type='THREAT'; title='Unrecognized people detected';
-    }else if(raw.startsWith('AI_STATE|STATE|OWNER_AND_UNKNOWN')){
-      type='THREAT'; title='Owner and unrecognized person detected';
-    }else if(raw.startsWith('PHOTO_SAVED|')){
-      type='EVIDENCE'; title='Security image captured';
-    }else if(raw.startsWith('WALK_AWAY_TIMER_ARMED')){
-      type='ACTION'; title='Walk-away protection armed';
-      detail = raw.split('|')[1]?.replace('delayMs=','') || '';
-    }else if(raw === 'WALK_AWAY_FOCUS_ACTIVATED'){
-      type='ACTION'; title='Privacy focus activated';
-    }else if(raw === 'WALK_AWAY_TIMER_EXPIRED'){
-      type='ACTION'; title='Walk-away timer expired';
-    }else if(raw === 'THREAT_FOCUS_ACTIVATED'){
-      type='ACTION'; title='Privacy focus activated';
-    }else if(raw.startsWith('THREAT_LOCK_TIMER_EXPIRED')){
-      type='ACTION'; title='Threat lock timer expired';
-    }else if(raw.startsWith('LOCK_REQUESTED|')){
-      type='ACTION'; title='Screen lock requested';
-      detail = raw.split('|')[1]?.replace('reason=','') || '';
-    }else if(raw.startsWith('LOCK_COMMAND_COMPLETED|')){
-      type='ACTION'; title='Screen locked';
-      detail = raw.split('|')[1]?.replace('reason=','') || '';
-    }else if(raw.startsWith('LOCK_ERROR|')){
-      type='ERROR'; title='Screen lock failed';
-    }else if(raw === 'AI_READY'){
-      type='SYSTEM'; title='Privacy recognition service ready';
-    }else if(raw.startsWith('AI_ERROR|') || raw === 'AI_WATCHDOG_TIMEOUT'){
-      type='ERROR'; title='Privacy recognition service unavailable';
-    }else{
-      continue;
-    }
-
-    events.push({timestamp,type,title,detail});
-  }
-
-  return events;
-}
-
   if(!logDir){
     logDir = path.join(app.getPath('userData'), 'logs');
     logFile = path.join(logDir, 'activity.log');
   }
   if(!fs.existsSync(logDir)) fs.mkdirSync(logDir,{recursive:true});
-  fs.appendFileSync(logFile, `${new Date().toISOString()} - ${event}\n`);
+  fs.appendFileSync(logFile, formatLogLine(event));
+}
+
+function activityLogFile(){
+  return logFile || path.join(app.getPath('userData'),'logs','activity.log');
 }
 
 function loadSettings(){
@@ -138,39 +75,169 @@ function configureCameraPermissions(){
   });
 }
 
-function createWindow(){
-  if(win && !win.isDestroyed()) return;
+// ---------------------------------------------------------------------------
+// Overlay windows: one per display. The primary window hosts the control panel;
+// secondary windows mirror the primary's render state.
 
-  win = new BrowserWindow({
-    fullscreen:true,
+function allOverlayWindows(){
+  const list = [];
+  if(win && !win.isDestroyed()) list.push(win);
+  for(const { window } of secondaryWindows.values()){
+    if(!window.isDestroyed()) list.push(window);
+  }
+  return list;
+}
+
+function createOverlayWindow(bounds, role){
+  const overlay = new BrowserWindow({
+    x:bounds.x,
+    y:bounds.y,
+    width:bounds.width,
+    height:bounds.height,
     transparent:true,
     frame:false,
+    resizable:false,
+    movable:false,
     alwaysOnTop:true,
+    skipTaskbar: role === 'secondary',
+    hasShadow:false,
     backgroundColor:'#00000000',
     webPreferences:{
       preload:path.join(__dirname,'preload.js'),
       contextIsolation:true,
-      nodeIntegration:false
+      nodeIntegration:false,
+      additionalArguments:[`--smartscreen-role=${role}`]
     }
   });
 
-  win.loadFile(path.join(__dirname,'..','frontend','index.html'));
+  // The constructor clamps to the work area (excludes the taskbar); setBounds applies the full display.
+  overlay.setBounds(bounds);
+  overlay.loadFile(path.join(__dirname,'..','frontend','index.html'));
+  overlay.setIgnoreMouseEvents(true,{forward:true});
+  overlay.setAlwaysOnTop(true,'screen-saver');
+  overlay.setVisibleOnAllWorkspaces(true);
+  overlay.setContentProtection(Boolean(lastRenderState?.pixelate));
+  return overlay;
+}
+
+function createWindow(){
+  if(win && !win.isDestroyed()) return;
+
+  const primary = screen.getPrimaryDisplay();
+  win = createOverlayWindow(primary.bounds, 'primary');
+  winDisplayId = primary.id;
+
   win.webContents.on('did-finish-load',()=>{
     win.webContents.send('settings-loaded',settings);
   });
 
-  win.on('closed',()=>{ win=null; });
-  win.setIgnoreMouseEvents(true,{forward:true});
-  win.setAlwaysOnTop(true,'screen-saver');
-  win.setVisibleOnAllWorkspaces(true);
+  win.on('closed',()=>{ win=null; winDisplayId=null; });
+  syncOverlayWindows();
 }
+
+function syncOverlayWindows(){
+  if(!win || win.isDestroyed()) return;
+
+  const displays = screen.getAllDisplays().map((d) => ({ id:d.id, bounds:d.bounds }));
+  const current = [{ id:win.id, role:'primary', displayId:winDisplayId, bounds:win.getBounds() }];
+  for(const [id, entry] of secondaryWindows){
+    if(entry.window.isDestroyed()){ secondaryWindows.delete(id); continue; }
+    current.push({ id, role:'secondary', displayId:entry.displayId, bounds:entry.window.getBounds() });
+  }
+
+  const plan = planOverlayWindows(displays, screen.getPrimaryDisplay().id, current);
+
+  for(const id of plan.removes){
+    const entry = secondaryWindows.get(id);
+    secondaryWindows.delete(id);
+    if(entry && !entry.window.isDestroyed()) entry.window.destroy();
+  }
+
+  for(const update of plan.updates){
+    if(update.id === win.id){
+      winDisplayId = update.displayId;
+      win.setBounds(update.bounds);
+    }else{
+      const entry = secondaryWindows.get(update.id);
+      if(!entry) continue;
+      entry.displayId = update.displayId;
+      entry.window.setBounds(update.bounds);
+    }
+  }
+
+  for(const create of plan.creates){
+    const overlay = createOverlayWindow(create.bounds, 'secondary');
+    const id = overlay.id;
+    secondaryWindows.set(id, { window:overlay, displayId:create.displayId });
+    overlay.webContents.on('did-finish-load',()=>{
+      if(lastRenderState && !overlay.isDestroyed()) overlay.webContents.send('overlay-render-state', lastRenderState);
+    });
+    overlay.on('closed',()=>secondaryWindows.delete(id));
+  }
+
+  if(plan.updates.length || plan.creates.length || plan.removes.length){
+    writeLog(`OVERLAY_DISPLAYS_SYNCED|displays=${displays.length}|created=${plan.creates.length}|removed=${plan.removes.length}|updated=${plan.updates.length}`);
+  }
+}
+
+function displayIdForSender(webContents){
+  const sender = BrowserWindow.fromWebContents(webContents);
+  if(!sender) return null;
+  if(sender === win) return winDisplayId;
+  return secondaryWindows.get(sender.id)?.displayId ?? null;
+}
+
+function sanitizeRenderState(state){
+  const value = state && typeof state === 'object' ? state : {};
+  return {
+    blur:value.blur === true,
+    pixelate:value.pixelate === true,
+    blackout:value.blackout === true,
+    focus:value.focus === true,
+    vignette:value.vignette === true,
+    level:clampLevel(value.level)
+  };
+}
+
+ipcMain.on('overlay-render-state',(event,state)=>{
+  if(!win || event.sender !== win.webContents) return;
+  const next = sanitizeRenderState(state);
+  const pixelateChanged = Boolean(lastRenderState?.pixelate) !== next.pixelate;
+  lastRenderState = next;
+
+  // Pixelate captures the screen; exclude our own overlays from that capture.
+  // Only while pixelate is on, so screen sharing still sees the other effects.
+  if(pixelateChanged){
+    for(const overlay of allOverlayWindows()) overlay.setContentProtection(next.pixelate);
+  }
+  for(const { window } of secondaryWindows.values()){
+    if(!window.isDestroyed()) window.webContents.send('overlay-render-state', next);
+  }
+});
+
+ipcMain.handle('get-capture-source',async(event)=>{
+  try{
+    const displayId = displayIdForSender(event.sender);
+    if(displayId === null) return { ok:false, error:'Unknown overlay window.' };
+
+    const sources = await desktopCapturer.getSources({ types:['screen'], thumbnailSize:{ width:0, height:0 } });
+    let source = sources.find((s) => String(s.display_id) === String(displayId));
+    // Some systems report empty display_id; fall back only when unambiguous.
+    if(!source && sources.length === 1 && screen.getAllDisplays().length === 1) source = sources[0];
+    if(!source) return { ok:false, error:'No capture source for this display.' };
+    return { ok:true, sourceId:source.id };
+  }catch(error){
+    writeLog(`PIXELATE_CAPTURE_ERROR|${error.message}`);
+    return { ok:false, error:error.message };
+  }
+});
 
 function createTray(){
   if(tray) return;
   tray = new Tray(path.join(assetPath,'icon-gray.png'));
   const menu = Menu.buildFromTemplate([
-    { label:'Show Overlay', click:()=>win?.show() },
-    { label:'Hide Overlay', click:()=>win?.hide() },
+    { label:'Show Overlay', click:()=>allOverlayWindows().forEach((w)=>w.show()) },
+    { label:'Hide Overlay', click:()=>allOverlayWindows().forEach((w)=>w.hide()) },
     { type:'separator' },
     { label:'Protection status: Local device', enabled:false },
     { type:'separator' },
@@ -456,19 +523,6 @@ ipcMain.on('enrollment-cancel',()=>{
   }
 });
 
-function parseStateMessage(message){
-  const parts = message.split('|');
-  const state = parts[1] || 'UNKNOWN';
-  const data = { state };
-  for(const part of parts.slice(2)){
-    const [key, value] = part.split('=');
-    if(!key) continue;
-    if(key === 'faces' || key === 'owners' || key === 'unknown') data[key] = Number(value || 0);
-    else if(key === 'best' || key === 'ownerScore') data[key] = Number(value || 0);
-  }
-  return data;
-}
-
 function sendWalkAwayStatus(phase, remainingMs=0){
   if(!win || win.isDestroyed()) return;
   win.webContents.send('walk-away-status', { phase, remainingMs: Math.max(0, remainingMs) });
@@ -477,31 +531,6 @@ function sendWalkAwayStatus(phase, remainingMs=0){
 function sendPrivacyAction(action, reason='state-change'){
   if(!win || win.isDestroyed()) return;
   win.webContents.send('privacy-action', { action, reason });
-}
-
-function cancelProtectionSequence(reason='state-change'){
-  if(walkAwayTimer){ clearTimeout(walkAwayTimer); walkAwayTimer=null; }
-  if(walkAwayCountdownTimer){ clearInterval(walkAwayCountdownTimer); walkAwayCountdownTimer=null; }
-  if(walkAwayFocusTimer){ clearTimeout(walkAwayFocusTimer); walkAwayFocusTimer=null; }
-  if(threatFocusTimer){ clearTimeout(threatFocusTimer); threatFocusTimer=null; }
-  if(threatLockTimer){ clearTimeout(threatLockTimer); threatLockTimer=null; }
-  if(activeProtectionSequence){
-    writeLog(`PROTECTION_SEQUENCE_CANCELLED|type=${activeProtectionSequence}|reason=${reason}`);
-    activeProtectionSequence=null;
-    sendPrivacyAction('CLEAR', reason);
-  }
-  walkAwayDeadline=0;
-}
-
-function cancelWalkAwayTimer(reason='state-change'){
-  if(walkAwayTimer || walkAwayCountdownTimer || walkAwayFocusTimer){
-    if(walkAwayTimer){ clearTimeout(walkAwayTimer); walkAwayTimer=null; }
-    if(walkAwayCountdownTimer){ clearInterval(walkAwayCountdownTimer); walkAwayCountdownTimer=null; }
-    if(walkAwayFocusTimer){ clearTimeout(walkAwayFocusTimer); walkAwayFocusTimer=null; }
-    walkAwayDeadline=0;
-    writeLog(`WALK_AWAY_TIMER_CANCELLED|reason=${reason}`);
-    sendWalkAwayStatus('CANCELLED',0);
-  }
 }
 
 function lockScreen(reason='manual'){
@@ -517,96 +546,19 @@ function lockScreen(reason='manual'){
   });
 }
 
-function armWalkAwayTimer(){
-  if(!pythonProcess || activeProtectionSequence === 'WALK_AWAY') return;
-  cancelProtectionSequence('new-walk-away');
-
-  const configuredDelay = Number(settings.walkAwayLockDelay ?? 6000);
-  const delay = Math.max(1000, Number.isFinite(configuredDelay) ? configuredDelay : 6000);
-  const focusConfigured = Number(settings.walkAwayFocusDelay ?? 3000);
-  const focusDelay = Math.min(delay - 250, Math.max(0, Number.isFinite(focusConfigured) ? focusConfigured : 3000));
-
-  activeProtectionSequence='WALK_AWAY';
-  sendPrivacyAction('BLUR','walk-away');
-  writeLog(`WALK_AWAY_TIMER_ARMED|delayMs=${delay}|focusDelayMs=${focusDelay}`);
-  walkAwayDeadline=Date.now()+delay;
-  sendWalkAwayStatus('ARMED',delay);
-
-  walkAwayFocusTimer=setTimeout(()=>{
-    walkAwayFocusTimer=null;
-    if(activeProtectionSequence !== 'WALK_AWAY') return;
-    sendPrivacyAction('FOCUS','walk-away');
-    writeLog('WALK_AWAY_FOCUS_ACTIVATED');
-  },focusDelay);
-
-  walkAwayCountdownTimer=setInterval(()=>{
-    const remainingMs=Math.max(0,walkAwayDeadline-Date.now());
-    sendWalkAwayStatus('COUNTDOWN',remainingMs);
-    if(remainingMs<=0 && walkAwayCountdownTimer){
-      clearInterval(walkAwayCountdownTimer);
-      walkAwayCountdownTimer=null;
-    }
-  },250);
-
-  walkAwayTimer=setTimeout(()=>{
-    walkAwayTimer=null;
-    if(walkAwayCountdownTimer){ clearInterval(walkAwayCountdownTimer); walkAwayCountdownTimer=null; }
-    if(walkAwayFocusTimer){ clearTimeout(walkAwayFocusTimer); walkAwayFocusTimer=null; }
-    walkAwayDeadline=0;
-    if(activeProtectionSequence !== 'WALK_AWAY') return;
-    writeLog('WALK_AWAY_TIMER_EXPIRED');
-    sendWalkAwayStatus('EXPIRED',0);
-    sendPrivacyAction('LOCKING','walk-away');
-    lockScreen('walk-away');
-  },delay);
-}
-
-function startThreatProtection(){
-  if(!pythonProcess || activeProtectionSequence === 'THREAT') return;
-  cancelProtectionSequence('new-threat');
-  activeProtectionSequence='THREAT';
-
-  const focusConfigured=Number(settings.intruderFocusDelay ?? 3000);
-  const lockConfigured=Number(settings.intruderLockDelay ?? 5000);
-  const focusDelay=Math.max(0,Number.isFinite(focusConfigured)?focusConfigured:3000);
-  const lockDelay=Math.max(focusDelay,Number.isFinite(lockConfigured)?lockConfigured:5000);
-
-  sendPrivacyAction('BLUR','threat');
-  threatFocusTimer=setTimeout(()=>{
-    threatFocusTimer=null;
-    if(activeProtectionSequence !== 'THREAT') return;
-    sendPrivacyAction('FOCUS','threat');
-    writeLog('THREAT_FOCUS_ACTIVATED');
-  },focusDelay);
-
-  threatLockTimer=setTimeout(()=>{
-    threatLockTimer=null;
-    if(activeProtectionSequence !== 'THREAT') return;
-    sendPrivacyAction('LOCKING','threat');
-    writeLog('THREAT_LOCK_TIMER_EXPIRED');
-    lockScreen('privacy-threat');
-  },lockDelay);
-}
-
-function updateWalkAwayForState(state){
-  if(state === 'NO_USER'){
-    if(activeProtectionSequence !== 'WALK_AWAY') armWalkAwayTimer();
-  }else if(state === 'OWNER_PRESENT'){
-    if(activeProtectionSequence === 'WALK_AWAY') cancelProtectionSequence('owner-returned');
-    cancelWalkAwayTimer('owner-present');
-  }else if(state === 'UNKNOWN_PERSON' || state === 'UNKNOWN_GROUP' || state === 'OWNER_AND_UNKNOWN'){
-    if(activeProtectionSequence === 'WALK_AWAY') cancelProtectionSequence('privacy-threat');
-    if(activeProtectionSequence !== 'THREAT') startThreatProtection();
-  }else{
-    cancelProtectionSequence(`state-${state}`);
-    cancelWalkAwayTimer(`state-${state}`);
-  }
-}
+const protection = createProtectionSequence({
+  getSettings:()=>settings,
+  isMonitoring:()=>Boolean(pythonProcess),
+  sendAction:sendPrivacyAction,
+  sendWalkAwayStatus,
+  log:writeLog,
+  lock:lockScreen
+});
 
 function sendAIState(payload){
   if(!win || win.isDestroyed()) return;
   win.webContents.send('ai-state', payload);
-  updateWalkAwayForState(payload.state);
+  protection.updateForState(payload.state);
 
   switch(payload.state){
     case 'OWNER_PRESENT':
@@ -627,9 +579,17 @@ function sendAIState(payload){
   }
 }
 
+// Report a monitoring failure to the renderer once per AI run, so a later
+// generic "exited with code 1" does not overwrite a specific CAMERA_ERROR.
+function reportAIFailure(kind, message){
+  protection.handleMonitorFailure(`ai-failed-${kind}`);
+  if(aiFailureReported) return;
+  aiFailureReported = true;
+  win?.webContents.send('ai-failed',{kind,message});
+}
+
 function stopAIProcess(){
-  cancelProtectionSequence('ai-stopped');
-  cancelWalkAwayTimer('ai-stopped');
+  protection.stop('ai-stopped');
   if(aiWatchdog){ clearInterval(aiWatchdog); aiWatchdog=null; }
   if(!pythonProcess) return;
   try{ pythonProcess.stdin.write('STOP\n'); }catch{}
@@ -639,12 +599,13 @@ function stopAIProcess(){
 
 function startAIWatchdog(){
   if(aiWatchdog) clearInterval(aiWatchdog);
+  const timeoutMs = Math.max(5000, Number(settings.aiWatchdogTimeoutMs ?? 15000) || 15000);
   lastAIHeartbeat = Date.now();
   aiWatchdog = setInterval(() => {
     if(!pythonProcess || !win || win.isDestroyed()) return;
-    if(Date.now() - lastAIHeartbeat > 15000){
+    if(Date.now() - lastAIHeartbeat > timeoutMs){
       writeLog('AI_WATCHDOG_TIMEOUT');
-      win.webContents.send('ai-failed',{kind:'AI_UNAVAILABLE',message:'The privacy recognition service stopped responding.'});
+      reportAIFailure('AI_UNAVAILABLE','The privacy recognition service stopped responding.');
       stopAIProcess();
     }
   },2000);
@@ -657,18 +618,19 @@ ipcMain.on('set-ignore-mouse',(_event,val)=>{
 
 ipcMain.on('start-ai',()=>{
   if(!win || pythonProcess) return;
+  aiFailureReported = false;
 
   let template;
   try{
     template = readTemplate(app.getPath('userData'));
   }catch(error){
     writeLog(`AI_TEMPLATE_ERROR|${error.message}`);
-    win.webContents.send('ai-failed',{kind:'AI_UNAVAILABLE',message:`Unable to read the owner biometric template: ${error.message}`});
+    reportAIFailure('AI_UNAVAILABLE',`Unable to read the owner biometric template: ${error.message}`);
     return;
   }
 
   if(!template?.embedding || !Array.isArray(template.embedding) || template.embedding.length === 0){
-    win.webContents.send('ai-failed',{kind:'AI_UNAVAILABLE',message:'Owner identity is not enrolled.'});
+    reportAIFailure('AI_UNAVAILABLE','Owner identity is not enrolled.');
     return;
   }
 
@@ -690,7 +652,7 @@ ipcMain.on('start-ai',()=>{
       '--recognizer',path.join(modelsPath,'face_recognition_sface_2021dec.onnx')
     ];
     if(!fs.existsSync(runPath)){
-      win.webContents.send('ai-failed',{kind:'AI_UNAVAILABLE',message:'Packaged AI service is missing.'});
+      reportAIFailure('AI_UNAVAILABLE','Packaged AI service is missing.');
       return;
     }
   }
@@ -698,7 +660,7 @@ ipcMain.on('start-ai',()=>{
   const detectorModelPath = args[args.indexOf('--detector') + 1];
   const recognizerModelPath = args[args.indexOf('--recognizer') + 1];
   if(!fs.existsSync(detectorModelPath) || !fs.existsSync(recognizerModelPath)){
-    win.webContents.send('ai-failed',{kind:'AI_UNAVAILABLE',message:'Face recognition models are missing.'});
+    reportAIFailure('AI_UNAVAILABLE','Face recognition models are missing.');
     return;
   }
 
@@ -709,7 +671,6 @@ ipcMain.on('start-ai',()=>{
   pythonProcess=child;
   win.webContents.send('ai-starting');
 
-  let configSent=false;
   const config = {
     template: template.embedding,
     threshold: Number(settings.recognitionThreshold ?? 0.363),
@@ -718,49 +679,47 @@ ipcMain.on('start-ai',()=>{
     confirmFrames: Math.max(1, Number(settings.aiConfirmFrames ?? 5)),
     minFaceSize: Math.max(40, Number(settings.minimumFaceSize ?? 70)),
     noUserDetectionDelay: Math.max(0.5, Number(settings.noUserDetectionDelay ?? 1.5)),
+    cameraFailureTimeout: Math.max(0.5, Number(settings.cameraFailureTimeout ?? 3)),
     logDir: logPath
   };
 
-  child.stdout.on('data',(data)=>{
-    data.toString().split(/\r?\n/).forEach((line)=>{
-      const msg=line.trim();
-      if(!msg || !win) return;
+  const isCurrent = () => pythonProcess === child;
 
-      if(msg === 'AI_READY'){
-        lastAIHeartbeat = Date.now();
-        writeLog('AI_READY');
-        win.webContents.send('ai-ready');
-      }else if(msg === 'AI_HEARTBEAT'){
-        lastAIHeartbeat = Date.now();
-      }else if(msg.startsWith('STATE|')){
-        lastAIHeartbeat = Date.now();
-        const payload = parseStateMessage(msg);
-        writeLog(`AI_STATE|${msg}`);
-        sendAIState(payload);
-      }else if(msg.startsWith('PHOTO_SAVED|')){
-        lastIntruderImage=msg.split('|').slice(1).join('|') || '';
-        writeLog(msg);
-        win.webContents.send('ai-photo-saved',{path:lastIntruderImage});
-      }else if(msg === 'PHOTO_SAVE_FAILED'){
-        writeLog('PHOTO_SAVE_FAILED');
-      }else if(msg.startsWith('AI_ERROR|')){
-        const parts = msg.split('|');
-        const kind = parts[1] || 'AI_UNAVAILABLE';
-        const message = parts.slice(2).join('|') || 'Privacy recognition service unavailable.';
-        writeLog(`AI_ERROR|${kind}|${message}`);
-        win.webContents.send('ai-failed',{kind,message});
-      }
-    });
+  const stdoutLines = createLineSplitter((msg)=>{
+    if(!win || !isCurrent()) return;
+
+    if(msg === 'AI_READY'){
+      lastAIHeartbeat = Date.now();
+      writeLog('AI_READY');
+      win.webContents.send('ai-ready');
+    }else if(msg === 'AI_HEARTBEAT'){
+      lastAIHeartbeat = Date.now();
+    }else if(msg.startsWith('STATE|')){
+      lastAIHeartbeat = Date.now();
+      const payload = parseStateMessage(msg);
+      writeLog(`AI_STATE|${msg}`);
+      sendAIState(payload);
+    }else if(msg.startsWith('PHOTO_SAVED|')){
+      lastIntruderImage=msg.split('|').slice(1).join('|') || '';
+      writeLog(msg);
+      win.webContents.send('ai-photo-saved',{path:lastIntruderImage});
+    }else if(msg === 'PHOTO_SAVE_FAILED'){
+      writeLog('PHOTO_SAVE_FAILED');
+    }else if(msg.startsWith('AI_ERROR|')){
+      const { kind, message } = parseErrorMessage(msg);
+      writeLog(`AI_ERROR|${kind}|${message}`);
+      reportAIFailure(kind, message);
+    }
   });
+  child.stdout.on('data',(data)=>stdoutLines.push(data));
 
   try{
     child.stdin.write(`${JSON.stringify(config)}\n`);
-    configSent=true;
   }catch(error){
     writeLog(`AI_CONFIG_SEND_ERROR|${error.message}`);
     try{ child.kill(); }catch{}
     pythonProcess=null;
-    win.webContents.send('ai-failed',{kind:'AI_UNAVAILABLE',message:error.message});
+    reportAIFailure('AI_UNAVAILABLE',error.message);
     return;
   }
 
@@ -772,22 +731,22 @@ ipcMain.on('start-ai',()=>{
   });
 
   child.on('error',(err)=>{
+    if(!isCurrent()) return;
     pythonProcess=null;
     if(aiWatchdog){ clearInterval(aiWatchdog); aiWatchdog=null; }
     writeLog(`AI_PROCESS_ERROR|${err.message}`);
-    win?.webContents.send('ai-failed',{kind:'AI_UNAVAILABLE',message:err.message});
+    reportAIFailure('AI_UNAVAILABLE',err.message);
   });
 
   child.on('exit',(code)=>{
+    stdoutLines.flush();
+    writeLog(`AI_EXIT|code=${code}`);
+    if(!isCurrent()) return;
     pythonProcess=null;
     if(aiWatchdog){ clearInterval(aiWatchdog); aiWatchdog=null; }
-    writeLog(`AI_EXIT|code=${code}`);
 
     if(code && code !== 0){
-      win?.webContents.send('ai-failed',{
-        kind:'AI_UNAVAILABLE',
-        message:`The privacy recognition service stopped unexpectedly (exit code ${code}).`
-      });
+      reportAIFailure('AI_UNAVAILABLE',`The privacy recognition service stopped unexpectedly (exit code ${code}).`);
       return;
     }
 
@@ -819,7 +778,7 @@ ipcMain.on('ai-intruder-cleared',()=>{
 ipcMain.on('lock-screen',(_event, reason)=>{
   lockScreen(typeof reason === 'string' ? reason : 'manual');
 });
-ipcMain.handle('get-security-events',(_event,limit)=>readSecurityEvents(limit));
+ipcMain.handle('get-security-events',(_event,limit)=>readSecurityEvents(activityLogFile(),limit));
 ipcMain.handle('get-last-intruder-image',()=>lastIntruderImage);
 
 app.on('second-instance',()=>{
@@ -853,6 +812,10 @@ app.whenReady().then(()=>{
   configureCameraPermissions();
   loadSettings();
   runRuntimeHealthCheck();
+
+  for(const eventName of ['display-added','display-removed','display-metrics-changed']){
+    screen.on(eventName,()=>syncOverlayWindows());
+  }
 
   const profile = readProfile(app.getPath('userData'));
   if(!profile?.setupComplete){
