@@ -54,13 +54,21 @@ test('classifies event types', () => {
     ['AI_ERROR|CAMERA_ERROR|The camera stopped delivering frames.', 'ERROR'],
     ['AI_WATCHDOG_TIMEOUT', 'ERROR'],
     ['PHOTO_SAVED|C:\\x.jpg', 'EVIDENCE'],
-    ['TEST_LOCK_SIMULATED|reason=walk-away', 'ACTION']
+    ['TEST_LOCK_SIMULATED|reason=walk-away', 'ACTION'],
+    ['AI_EXIT|code=1', 'ERROR']
   ];
   for (const [raw, type] of cases) {
     assert.equal(parseLogLine(`2026-10-01T10:00:00.000Z - ${raw}`).type, type, raw);
   }
   assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - AI_ERROR|CAMERA_ERROR|x').title, 'Camera unavailable');
   assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - TEST_LOCK_SIMULATED|reason=walk-away').title, 'Screen lock simulated (test mode)');
+});
+
+test('only unexpected backend exits are security events', () => {
+  assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - AI_EXIT|code=1').title, 'Privacy recognition service stopped unexpectedly');
+  assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - AI_EXIT|code=3221225786').detail, '3221225786');
+  assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - AI_EXIT|code=0'), null);
+  assert.equal(parseLogLine('2026-10-01T10:00:00.000Z - AI_EXIT|code=null'), null);
 });
 
 test('log values cannot inject extra lines', () => {

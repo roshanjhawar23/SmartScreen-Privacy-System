@@ -31,17 +31,18 @@ class FakeClock:
 
 
 class FakeCamera:
-    """Delivers ``good`` blank frames, then fails every read."""
+    """Delivers ``good`` face-free frames with sensor noise, then fails every read."""
 
     def __init__(self, clock, good, step=0.1):
         self.clock, self.good, self.step = clock, good, step
         self.reads = 0
+        self.rng = np.random.default_rng(0)
 
     def read(self):
         self.reads += 1
         self.clock.t += self.step
         if self.reads <= self.good:
-            return True, np.full((480, 640, 3), 90, dtype=np.uint8)
+            return True, self.rng.integers(80, 100, (480, 640, 3), dtype=np.uint8)
         return False, None
 
 
@@ -80,7 +81,7 @@ def test_real_models_no_face_then_camera_error(tmp_path, captured, models):
             threading.Event(), clock=clock, sleep=clock.sleep,
         )
 
-    assert str(err.value).startswith("CAMERA_ERROR|")
+    assert str(err.value) == "CAMERA_ERROR|The camera stopped delivering frames."
     assert captured == ["STATE|NO_USER|faces=0|owners=0|unknown=0|best=0.0000"]
     assert os.listdir(tmp_path) == []  # no snapshots for empty frames
 
@@ -103,3 +104,56 @@ def test_parse_config_default_log_dir_not_in_repo():
     config = face_detection.parse_config({"template": [1.0, 0.0]})
     repo = os.path.dirname(MODELS_DIR)
     assert not os.path.abspath(config["logDir"]).lower().startswith(repo.lower())
+
+
+class ImageCamera:
+    """Delivers frames from ``make(i)`` forever (reads always succeed)."""
+
+    def __init__(self, clock, make, step=0.1):
+        self.clock, self.make, self.step, self.reads = clock, make, step, 0
+
+    def read(self):
+        self.reads += 1
+        self.clock.t += self.step
+        return True, self.make(self.reads)
+
+
+def test_blocked_camera_black_frames_are_a_camera_error(tmp_path, captured, models):
+    detector, recognizer = models
+    clock = FakeClock()
+    black = lambda i: np.zeros((480, 640, 3), dtype=np.uint8)
+    with pytest.raises(face_detection.CameraError) as err:
+        face_detection.run_monitor(ImageCamera(clock, black), detector, recognizer, make_config(tmp_path),
+                                   threading.Event(), clock=clock, sleep=clock.sleep)
+    assert str(err.value).startswith("CAMERA_ERROR|The camera image is blocked or frozen (frozen")
+
+
+def test_covered_lens_dark_noise_is_a_camera_error(tmp_path, captured, models):
+    detector, recognizer = models
+    clock = FakeClock()
+    rng = np.random.default_rng(1)
+    dark = lambda i: rng.integers(0, 4, (480, 640, 3), dtype=np.uint8)
+    with pytest.raises(face_detection.CameraError) as err:
+        face_detection.run_monitor(ImageCamera(clock, dark), detector, recognizer, make_config(tmp_path),
+                                   threading.Event(), clock=clock, sleep=clock.sleep)
+    assert "(dark" in str(err.value)
+
+
+def test_live_empty_room_is_not_a_camera_error(tmp_path, captured, models):
+    detector, recognizer = models
+    clock = FakeClock()
+    rng = np.random.default_rng(2)
+    base = np.tile(np.linspace(40, 200, 640, dtype=np.uint8), (480, 1))[..., None].repeat(3, axis=2)
+    room = lambda i: np.clip(base.astype(np.int16) + rng.normal(0, 3, base.shape), 0, 255).astype(np.uint8)
+    camera = ImageCamera(clock, room)
+    stop = threading.Event()
+    original = camera.read
+
+    def read():
+        if camera.reads >= 60:  # 6 s of frames, then stop the loop
+            stop.set()
+        return original()
+
+    camera.read = read
+    face_detection.run_monitor(camera, detector, recognizer, make_config(tmp_path), stop, clock=clock, sleep=clock.sleep)
+    assert captured == ["STATE|NO_USER|faces=0|owners=0|unknown=0|best=0.0000"]

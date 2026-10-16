@@ -6,6 +6,7 @@ from monitor_core import (
     CameraHealth,
     Emitter,
     FrameObservation,
+    ImageHealth,
     LoopHeartbeat,
     StateTracker,
     default_log_dir,
@@ -135,3 +136,43 @@ def test_emitter_strips_embedded_newlines():
 def test_default_log_dir_is_outside_repo():
     repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     assert not os.path.abspath(default_log_dir()).lower().startswith(repo.lower())
+
+
+# --- ImageHealth: frames arrive but carry no real image -------------------
+
+def test_image_health_live_noise_is_ok():
+    health = ImageHealth(failure_timeout=3.0)
+    for i in range(100):
+        assert health.check(i * 0.1, mean=95.0, std=30.0, signature=bytes([i % 256])) is None
+
+
+def test_image_health_frozen_frames_fail_once_after_timeout():
+    health = ImageHealth(failure_timeout=3.0)
+    assert health.check(0.0, 120.0, 40.0, b"same") is None
+    assert health.check(0.1, 120.0, 40.0, b"same") is None  # frozen since 0.1
+    assert health.check(3.0, 120.0, 40.0, b"same") is None
+    assert health.check(3.1, 120.0, 40.0, b"same") == "frozen"
+    assert health.check(4.0, 120.0, 40.0, b"same") is None  # reported once
+
+
+def test_image_health_dark_uniform_frames_fail():
+    health = ImageHealth(failure_timeout=3.0)
+    results = [health.check(i * 0.5, mean=2.0, std=1.0, signature=bytes([i])) for i in range(8)]
+    assert results[:6] == [None] * 6
+    assert results[6] == "dark"
+
+
+def test_image_health_recovers_before_timeout():
+    health = ImageHealth(failure_timeout=3.0)
+    health.check(0.0, 2.0, 1.0, b"a")
+    health.check(2.0, 2.0, 1.0, b"b")
+    assert health.check(2.5, 90.0, 25.0, b"c") is None  # real image again: timer reset
+    assert health.check(4.0, 2.0, 1.0, b"d") is None
+    assert health.check(6.9, 2.0, 1.0, b"e") is None
+    assert health.check(7.0, 2.0, 1.0, b"f") == "dark"
+
+
+def test_image_health_dark_but_textured_scene_is_ok():
+    health = ImageHealth(failure_timeout=1.0)
+    for i in range(50):
+        assert health.check(i * 0.1, mean=8.0, std=9.0, signature=bytes([i])) is None

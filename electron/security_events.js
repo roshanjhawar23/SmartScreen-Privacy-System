@@ -38,6 +38,8 @@ function describeEvent(raw){
   if(raw.startsWith('LOCK_ERROR|')) return { type:'ERROR', title:'Screen lock failed' };
   if(raw === 'AI_READY') return { type:'SYSTEM', title:'Privacy recognition service ready' };
   if(raw.startsWith('AI_ERROR|CAMERA_ERROR')) return { type:'ERROR', title:'Camera unavailable' };
+  // code=null is our own STOP/kill on disable; code=0 a clean exit. Anything else is a crash.
+  if(/^AI_EXIT\|code=(?!0$|null$)/.test(raw)) return { type:'ERROR', title:'Privacy recognition service stopped unexpectedly', detail:field(raw,1,'code=') };
   if(raw.startsWith('AI_ERROR|') || raw === 'AI_WATCHDOG_TIMEOUT') return { type:'ERROR', title:'Privacy recognition service unavailable' };
   return null;
 }

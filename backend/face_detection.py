@@ -14,6 +14,7 @@ from monitor_core import (
     CameraHealth,
     Emitter,
     FrameObservation,
+    ImageHealth,
     LoopHeartbeat,
     StateTracker,
     default_log_dir,
@@ -114,6 +115,13 @@ def heartbeat_loop(heartbeat: LoopHeartbeat, stop_event: threading.Event, clock=
             emit("AI_HEARTBEAT")
 
 
+def image_stats(frame) -> tuple[float, float, bytes]:
+    """Mean, std and a signature of a small grayscale copy (cheap, every frame)."""
+    small = cv2.resize(frame, (80, 60), interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if small.ndim == 3 else small
+    return float(gray.mean()), float(gray.std()), gray.tobytes()
+
+
 def observe_frame(frame, detector, recognizer, owner_template, config) -> FrameObservation:
     height, width = frame.shape[:2]
     detector.setInputSize((width, height))
@@ -152,6 +160,7 @@ def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None
         start_time=clock(),
     )
     camera_health = CameraHealth(failure_timeout=float(config["cameraFailureTimeout"]))
+    image_health = ImageHealth(failure_timeout=float(config["cameraFailureTimeout"]))
     frame_counter = 0
 
     while not stop_event.is_set():
@@ -171,6 +180,13 @@ def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None
         camera_health.frame_ok()
         if heartbeat:
             heartbeat.tick(now)
+
+        mean, std, signature = image_stats(frame)
+        blocked = image_health.check(now, mean, std, signature)
+        if blocked:
+            raise CameraError(
+                f"CAMERA_ERROR|The camera image is blocked or frozen ({blocked}, mean={mean:.1f}, std={std:.1f})."
+            )
 
         frame_counter += 1
         if frame_counter % process_every_n != 0:

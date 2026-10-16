@@ -154,6 +154,51 @@ class CameraHealth:
         return False
 
 
+@dataclass
+class ImageHealth:
+    """Detects a camera that delivers frames, but no real image.
+
+    When Windows revokes camera access (or a driver shows a placeholder), reads keep
+    succeeding with black or constant frames, which would otherwise look like an
+    empty room. Real sensors always add noise, so:
+    - ``frozen``: consecutive frames are byte-identical (on a downsampled view);
+    - ``dark``: the image is near-black and uniform (blocked access, covered lens).
+    Either condition lasting ``failure_timeout`` seconds is a camera failure.
+    """
+
+    failure_timeout: float = 3.0
+    dark_mean: float = 10.0
+    uniform_std: float = 4.0
+    bad_since: float | None = None
+    last_signature: bytes | None = None
+    failed: bool = False
+
+    def classify(self, mean: float, std: float, signature: bytes) -> str | None:
+        frozen = self.last_signature is not None and signature == self.last_signature
+        self.last_signature = signature
+        if frozen:
+            return "frozen"
+        if mean < self.dark_mean and std < self.uniform_std:
+            return "dark"
+        return None
+
+    def check(self, now: float, mean: float, std: float, signature: bytes) -> str | None:
+        """Returns the reason exactly once when the image is considered lost."""
+        reason = self.classify(mean, std, signature)
+        if reason is None:
+            self.bad_since = None
+            return None
+        if self.failed:
+            return None
+        if self.bad_since is None:
+            self.bad_since = now
+            return None
+        if now - self.bad_since >= self.failure_timeout:
+            self.failed = True
+            return reason
+        return None
+
+
 class LoopHeartbeat:
     """Heartbeat that is only emitted while the vision loop is making progress.
 
