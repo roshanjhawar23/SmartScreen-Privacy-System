@@ -16,6 +16,8 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+# The webcam uses Media Foundation / DirectShow; the FFmpeg plugin (LGPL) is not needed.
+a.binaries = [b for b in a.binaries if 'videoio_ffmpeg' not in b[0].lower()]
 pyz = PYZ(a.pure)
 
 exe = EXE(
