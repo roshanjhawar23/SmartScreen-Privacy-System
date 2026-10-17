@@ -37,3 +37,6 @@ tests/fixtures/private/
 tests/e2e/artifacts/
 test-results/
 playwright-report/
+
+# PyInstaller spec for the shipped AI service is source, not output
+!backend/smartscreen_ai.spec

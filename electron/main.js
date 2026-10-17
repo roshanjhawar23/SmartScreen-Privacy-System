@@ -10,7 +10,8 @@ const { createLineSplitter, parseStateMessage, parseErrorMessage, parseStatsMess
 const { createProtectionSequence } = require('./protection_sequence');
 const { planOverlayWindows } = require('./display_layout');
 const { clampLevel } = require('../frontend/intensity');
-const { createScreenLocker, isTestMode } = require('./screen_lock');
+const { createScreenLocker } = require('./screen_lock');
+const { resolveAiCommand, effectiveTestMode, childEnv } = require('./ai_paths');
 const { createPresenceGate } = require('./presence_gate');
 const { createVirtualDesktops, followCurrentDesktop } = require('./virtual_desktop');
 const { normalizePolicies, resolveProfileName, matchSensitiveApp } = require('./policies');
@@ -25,8 +26,8 @@ const { createAutoSwitcher, parseNetshSsid } = require('./profile_rules');
 const enterprise = require('./enterprise_policy');
 const { exportBundle, importBundle } = require('./settings_transfer');
 
-// Self-test harness only (SMARTSCREEN_TEST=1): isolated profile and a recorded camera source.
-const TEST_MODE = isTestMode();
+// Self-test harness only (SMARTSCREEN_TEST=1, dev only): isolated profile and a recorded camera source.
+const TEST_MODE = effectiveTestMode({ packaged:app.isPackaged });
 if(TEST_MODE && process.env.SMARTSCREEN_USER_DATA){
   app.setPath('userData', path.resolve(process.env.SMARTSCREEN_USER_DATA));
 }
@@ -745,23 +746,23 @@ async function finishEnrollment(result){
 
 function runEnrollmentPython(imagePaths){
   return new Promise((resolve,reject)=>{
-    const scriptPath = path.join(__dirname,'..','backend','enroll_face.py');
+    const ai = resolveAiCommand({ packaged:app.isPackaged, resourcesPath:process.resourcesPath, appDir:path.join(__dirname,'..'), mode:'enroll' });
     const modelDetector = path.join(modelsPath,'face_detection_yunet_2023mar.onnx');
     const modelRecognizer = path.join(modelsPath,'face_recognition_sface_2021dec.onnx');
 
-    if(!fs.existsSync(scriptPath)) return reject(new Error('Enrollment service not found.'));
+    if(!fs.existsSync(app.isPackaged ? ai.command : ai.args[0])) return reject(new Error('Enrollment service not found.'));
     if(!fs.existsSync(modelDetector) || !fs.existsSync(modelRecognizer)){
       return reject(new Error('Face models are missing. Run the model download script before enrollment.'));
     }
 
     const args = [
-      scriptPath,
+      ...ai.args,
       '--detector', modelDetector,
       '--recognizer', modelRecognizer,
       ...imagePaths.flatMap((p)=>['--image',p])
     ];
 
-    const child = spawn('python', args, { stdio:['ignore','pipe','pipe'], windowsHide:true });
+    const child = spawn(ai.command, args, { stdio:['ignore','pipe','pipe'], windowsHide:true, env:childEnv({ testMode:TEST_MODE }) });
     let stdout='';
     let stderr='';
     let settled=false;
@@ -965,6 +966,7 @@ function sendPrivacyAction(action, reason='state-change'){
 
 const lockScreen = createScreenLocker({
   exec,
+  env:childEnv({ testMode:TEST_MODE }),
   log:writeLog,
   onError:(error)=>console.error('WINDOWS LOCK ERROR:', error.message)
 });
@@ -1121,27 +1123,16 @@ function startAI(){
     return;
   }
 
-  const isDev = !app.isPackaged;
-  let runPath;
-  let args=[];
-
-  if(isDev){
-    runPath='python';
-    args=[
-      path.join(__dirname,'..','backend','face_detection.py'),
-      '--detector',path.join(modelsPath,'face_detection_yunet_2023mar.onnx'),
-      '--recognizer',path.join(modelsPath,'face_recognition_sface_2021dec.onnx')
-    ];
-  }else{
-    runPath=path.join(process.resourcesPath,'backend','dist','face_detection.exe');
-    args=[
-      '--detector',path.join(modelsPath,'face_detection_yunet_2023mar.onnx'),
-      '--recognizer',path.join(modelsPath,'face_recognition_sface_2021dec.onnx')
-    ];
-    if(!fs.existsSync(runPath)){
-      reportAIFailure('AI_UNAVAILABLE','Packaged AI service is missing.');
-      return;
-    }
+  const ai = resolveAiCommand({ packaged:app.isPackaged, resourcesPath:process.resourcesPath, appDir:path.join(__dirname,'..'), mode:'monitor' });
+  let runPath = ai.command;
+  let args=[
+    ...ai.args,
+    '--detector',path.join(modelsPath,'face_detection_yunet_2023mar.onnx'),
+    '--recognizer',path.join(modelsPath,'face_recognition_sface_2021dec.onnx')
+  ];
+  if(app.isPackaged && !fs.existsSync(runPath)){
+    reportAIFailure('AI_UNAVAILABLE','Packaged AI service is missing.');
+    return;
   }
 
   const detectorModelPath = path.join(modelsPath,'face_detection_yunet_2023mar.onnx');
@@ -1152,7 +1143,7 @@ function startAI(){
   }
 
   // Self-test harness only: a scripted backend that speaks the same line protocol.
-  let spawnEnv = process.env;
+  let spawnEnv = childEnv({ testMode:TEST_MODE });
   if(TEST_MODE && process.env.SMARTSCREEN_MOCK_BACKEND){
     runPath = process.execPath;
     args = [path.join(__dirname,'..','tests','e2e','mock_backend.js'), path.resolve(process.env.SMARTSCREEN_MOCK_BACKEND)];

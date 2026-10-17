@@ -98,10 +98,14 @@ def main() -> None:
     )
 
 
-if __name__ == "__main__":
+def run() -> None:
     try:
         main()
     except SystemExit:
         raise
     except Exception as exc:
         fail(str(exc))
+
+
+if __name__ == "__main__":
+    run()

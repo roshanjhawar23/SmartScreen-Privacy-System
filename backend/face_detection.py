@@ -380,7 +380,7 @@ def main() -> None:
         camera.release()
 
 
-if __name__ == "__main__":
+def run() -> None:
     try:
         main()
     except SystemExit:
@@ -392,3 +392,7 @@ if __name__ == "__main__":
         else:
             emit_error(f"AI_UNAVAILABLE|{message}")
         raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    run()
