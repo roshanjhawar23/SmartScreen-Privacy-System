@@ -18,6 +18,12 @@ First public release. Windows 10/11, CPU-only, offline.
 - **Release (Phase 5):** Electron 44.5.1; security images opt-in and encrypted with `safeStorage`
   (newest 30, never the owner, in-app viewer); MIT license; NSIS installer with a one-folder
   PyInstaller AI service; explicit packaging allow-list; third-party notices.
+- **Panel:** Enable/Disable Protection is pinned at the top; Manage and Diagnostics scroll inside
+  their own section and never overlap other content; the panel never exceeds the screen height. The
+  panel drags from its header or any empty area, snaps to screen edges within 24 px and remembers
+  its position.
+- **Icon:** original shield-and-lens icon (master SVG) for the app, taskbar, installer and shortcuts;
+  tray variants by state: green active, red threat, grey inactive, amber failsafe.
 
 ### Security
 - Self-test switches (`SMARTSCREEN_TEST` etc.) are ignored by installed builds.

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- SmartScreen master icon: original geometric shield with a lens-eye. State variants
+       change only the shield fill (scripts/render_icons.js). -->
+  <path d="M128 14 L226 50 V122 C226 184 184 224 128 244 C72 224 30 184 30 122 V50 Z"
+        fill="#2F7DF6" stroke="#0E1A2B" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M50 134 C84 86 172 86 206 134 C172 182 84 182 50 134 Z" fill="#FFFFFF"/>
+  <circle cx="128" cy="134" r="32" fill="#0E1A2B"/>
+  <circle cx="139" cy="123" r="10" fill="#FFFFFF"/>
+</svg>

@@ -333,6 +333,8 @@ const assetPath = app.isPackaged
   ? path.join(process.resourcesPath,'assets')
   : path.join(__dirname,'..','assets');
 
+const appIconPath = path.join(assetPath,'icon.ico'); // window, taskbar and shortcut icon
+
 const modelsPath = app.isPackaged
   ? path.join(process.resourcesPath,'models')
   : path.join(__dirname,'..','models');
@@ -362,6 +364,7 @@ function allOverlayWindows(){
 
 function createOverlayWindow(bounds, role){
   const overlay = new BrowserWindow({
+    icon:appIconPath,
     x:bounds.x,
     y:bounds.y,
     width:bounds.width,
@@ -616,6 +619,7 @@ function showMainWindow(){
 function createSetupWindow(){
   if(setupWindow && !setupWindow.isDestroyed()) return;
   setupWindow = new BrowserWindow({
+    icon:appIconPath,
     width:560,
     height:620,
     minWidth:520,
@@ -643,6 +647,7 @@ function createEnrollmentWindow(){
   }
 
   enrollmentWindow = new BrowserWindow({
+    icon:appIconPath,
     width:760,
     height:700,
     minWidth:720,
@@ -1047,6 +1052,7 @@ function reportAIFailure(kind, message, reason){
   if(protectionActive && restartLoop.record(performance.now())) reportTamper('ai-restart-loop', `failures=${restartLoop.count}|windowMin=10`);
   protection.handleMonitorFailure(`ai-failed-${kind}`);
   presenceGate.failsafe(reason || (kind === 'CAMERA_ERROR' ? 'camera-error' : 'ai-unavailable'));
+  if(protectionActive) setTrayStatus('icon-amber.png','SmartScreen Privacy Suite — Failsafe: camera or AI unavailable');
   if(aiFailureReported) return;
   aiFailureReported = true;
   win?.webContents.send('ai-failed',{kind,message});
@@ -1185,6 +1191,7 @@ function startAI(){
     if(msg === 'AI_READY'){
       lastAIHeartbeat = performance.now();
       writeLog('AI_READY');
+      if(trayStatus.icon === 'icon-amber.png') setTrayStatus('icon-green.png','SmartScreen Privacy Suite — Protection active');
       win.webContents.send('ai-ready');
     }else if(msg === 'AI_HEARTBEAT'){
       lastAIHeartbeat = performance.now();

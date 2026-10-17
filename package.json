@@ -52,9 +52,9 @@
         "filter": [
           "icon.ico",
           "icon.png",
-          "icon-gray.png",
-          "icon-green.png",
-          "icon-red.png"
+          "icon.svg",
+          "icon-*.png",
+          "icons/*.png"
         ]
       },
       {
@@ -80,7 +80,13 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "license": "LICENSE"
+      "license": "LICENSE",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SmartScreen Privacy Suite"
     },
     "afterPack": "scripts/after_pack.js",
     "publish": null

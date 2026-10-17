@@ -40,3 +40,6 @@ playwright-report/
 
 # PyInstaller spec for the shipped AI service is source, not output
 !backend/smartscreen_ai.spec
+
+# Claude Code local settings
+.claude/
