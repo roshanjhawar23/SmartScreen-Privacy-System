@@ -73,6 +73,9 @@ be LIVE before the screen is revealed; missing liveness data counts as not verif
 - **Stops:** a printed or phone photo held still or on a stand, frozen images, static virtual-camera feeds.
 - **Does not stop:** a hand-held photo that is tilted (it produces head-movement), a replayed video
   shown on a phone or monitor (moiré is off), a 3D mask.
+- **Live finding (Phases 3 and 5):** on the test laptop the blink cue never fired; liveness was only
+  reached through head movement. In practice the owner may need to move their head slightly before the
+  screen is revealed.
 - Landmark jitter limits all of this: thresholds sit above the jitter measured on synthetic data, so a
   very still real person may stay UNKNOWN until they move or blink.
 
@@ -153,3 +156,30 @@ or window titles.
 ## Pixelate
 While pixelate is on, the overlay is excluded from screen capture (so it can capture the screen
 underneath), which means screen sharing shows the raw screen during that time.
+
+## Installed build (Phase 5, v1.0.0)
+- **Self-test switches are dev-only.** `SMARTSCREEN_TEST` and the other `SMARTSCREEN_*` variables
+  (simulated locking, recorded camera, mock backend, separate profile/config) are ignored when the app
+  is packaged and removed from the environment of child processes, so an environment variable cannot
+  turn off locking or replace the camera in an installed copy.
+- **AI service:** the installer ships one PyInstaller build, `resources/backend/smartscreen_ai/`,
+  used for both monitoring and enrollment; the installed app never runs the system `python`. The
+  folder lives under Program Files (or the chosen directory) and is as protected as that directory: a
+  local administrator can replace it, like any other installed program.
+- **Unsigned installer.** The v1.0.0 installer and executables are not code-signed. Windows
+  (Defender SmartScreen) will warn on first run; verify the download against the published SHA-256.
+- **What ships:** an explicit allow-list (`package.json` → `build.files`, `extraResources`); camera
+  images, logs, `.enc` files, backups, tests, docs and scripts are excluded and the build is checked
+  for them before release. User data (templates, settings, logs, security images) is created at runtime
+  in `%APPDATA%\smartscreen-privacy-suite` and is not removed by the uninstaller.
+- **No updates, no network.** The app makes no network requests and has no auto-update.
+
+## Known limits (summary)
+- Recognition is a similarity score against a threshold, not proof of identity; look-alikes and twins
+  can pass, and lighting changes can lock the owner out (fail-closed).
+- Liveness is a heuristic (see above): a tilted hand-held photo, a replayed video or a mask can pass.
+- The virtual-desktop follow polls every 250 ms; for up to that long after switching desktops the
+  overlay may not be on the new desktop. The 250 ms value is measured in the Phase 5 live check.
+- Pixelate excludes the overlay from screen capture (see above).
+- A local administrator can stop or modify SmartScreen; it is a privacy aid, not a security boundary.
+  It never unlocks Windows and never replaces Windows authentication.
