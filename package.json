@@ -27,6 +27,7 @@
     "directories": {
       "output": "dist"
     },
+    "electronDist": "node_modules/electron/dist",
     "files": [
       "package.json",
       "electron/**/*.js",
@@ -80,7 +81,9 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "license": "LICENSE"
-    }
+    },
+    "afterPack": "scripts/after_pack.js",
+    "publish": null
   },
   "dependencies": {
     "koffi": "^3.3.3"
