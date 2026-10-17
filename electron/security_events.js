@@ -61,7 +61,10 @@ function describeEvent(raw){
   if(raw.startsWith('PROFILE_SAVED|')) return { type:'SYSTEM', title:`Profile saved: ${field(raw,1,'profile=')}` };
   if(raw.startsWith('PROFILE_DELETED|')) return { type:'SYSTEM', title:`Profile deleted: ${field(raw,1,'profile=')}` };
   if(raw.startsWith('ENTERPRISE_REFUSED|')) return { type:'SYSTEM', title:'Blocked by organization policy', detail:field(raw,1,'action=') };
-  if(raw === 'EVIDENCE_FOLDER_OPENED') return { type:'EVIDENCE', title:'Security images folder opened' };
+  if(raw.startsWith('PHOTO_DISCARDED|')) return { type:'EVIDENCE', title:'Security image deleted — trusted person recognized' };
+  if(raw.startsWith('EVIDENCE_SETTING|')) return { type:'EVIDENCE', title:field(raw,1,'enabled=') === 'true' ? 'Security images turned on' : 'Security images turned off' };
+  if(raw.startsWith('EVIDENCE_DELETED|')) return { type:'EVIDENCE', title:'Security images deleted', detail:field(raw,1,'count=') };
+  if(raw.startsWith('EVIDENCE_MIGRATED|')) return { type:'EVIDENCE', title:'Security images encrypted' };
   if(raw.startsWith('SETTINGS_EXPORTED|')) return { type:'SYSTEM', title:'Settings exported' };
   if(raw.startsWith('SETTINGS_IMPORTED|')) return { type:'SYSTEM', title:'Settings imported' };
   if(raw.startsWith('CONFIG_CHANGED_SINCE_LAST_RUN|')) return { type:'SYSTEM', title:'Settings changed since last run', detail:field(raw,1,'file=') };

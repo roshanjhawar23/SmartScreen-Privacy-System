@@ -7,7 +7,6 @@ unit-tested without OpenCV, a webcam or real sleeps.
 from __future__ import annotations
 
 import os
-import re
 import sys
 import threading
 from dataclasses import dataclass, field
@@ -294,16 +293,18 @@ class LoopHeartbeat:
             return (now - self._last_tick) <= self.stall_timeout
 
 
-# Intruder snapshots are named by save_intruder_snapshot: YYYYMMDD_HHMMSS_mmm.jpg
-EVIDENCE_NAME = re.compile(r"^\d{8}_\d{6}_\d{3}\.jpg$")
-
-
 @dataclass(frozen=True)
 class EvidenceConfig:
-    enabled: bool = True
-    max_images: int = 30     # newest N kept, older ones deleted
-    max_width: int = 320     # images are downscaled to this width (small files)
+    """Security images (intruder snapshots). Opt-in: off unless the owner turns it on.
+
+    The backend never writes images to disk: it encodes a small JPEG in memory and sends it to
+    the Electron main process, which encrypts it with safeStorage and keeps the newest N.
+    """
+
+    enabled: bool = False
+    max_width: int = 320     # downscaled to this width (small files)
     jpeg_quality: int = 70
+    max_bytes: int = 40_000  # the encoded JPEG must fit one protocol line comfortably
 
     @classmethod
     def from_dict(cls, raw: dict | None) -> "EvidenceConfig":
@@ -316,18 +317,42 @@ class EvidenceConfig:
                 return default
 
         return cls(
-            enabled=raw.get("enabled") is not False,
-            max_images=number("maxImages", 30, 1, 1000),
-            max_width=number("maxWidth", 320, 160, 1280),
-            jpeg_quality=number("jpegQuality", 70, 40, 95),
+            enabled=raw.get("enabled") is True,
+            max_width=number("maxWidth", 320, 160, 640),
+            jpeg_quality=number("jpegQuality", 70, 40, 90),
         )
 
 
-def evidence_to_delete(names, keep: int) -> list[str]:
-    """Oldest snapshot names beyond the newest ``keep``. Only our own file names are considered,
-    so nothing else in the folder is ever deleted. Names sort chronologically."""
-    ours = sorted(n for n in names if EVIDENCE_NAME.match(n))
-    return ours[: max(0, len(ours) - max(1, int(keep)))]
+@dataclass
+class EvidenceEvents:
+    """Never keep a photo of the owner.
+
+    Each photo belongs to an event: the unknown face tracks that triggered it. If one of those
+    tracks is later confirmed as a trusted person (its smoothed role becomes owner) while the
+    event is open, the event is reported for deletion. Events close after ``window`` seconds.
+    """
+
+    window: float = 60.0
+    _events: dict = field(default_factory=dict)  # id -> (opened_at, frozenset(track ids))
+    _next_id: int = 1
+
+    def open(self, now: float, track_ids) -> int:
+        event_id = self._next_id
+        self._next_id += 1
+        self._events[event_id] = (now, frozenset(track_ids))
+        return event_id
+
+    def check(self, now: float, tracks) -> list[int]:
+        """Event ids to discard because one of their tracks is now confirmed as the owner."""
+        owners = {t.id for t in tracks if t.role == OWNER}
+        discard = []
+        for event_id, (opened, ids) in list(self._events.items()):
+            if now - opened > self.window:
+                del self._events[event_id]
+            elif ids & owners:
+                del self._events[event_id]
+                discard.append(event_id)
+        return discard
 
 
 def default_log_dir() -> str:

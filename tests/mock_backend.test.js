@@ -2,15 +2,15 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { formatState, formatTracks, parseScenario, runScenario } = require('./e2e/mock_backend');
+const { formatState, formatTracks, parseScenario, runScenario, TINY_JPEG } = require('./e2e/mock_backend');
 const { parseStateMessage } = require('../electron/ai_protocol');
 const { createFakeTimers } = require('./helpers/fake_timers');
 
-function run(raw){
+function run(raw, evidence = { on:false }){
   const timers = createFakeTimers(0);
   const lines = [];
   const exits = [];
-  const handle = runScenario(parseScenario(raw), { emit:(l) => lines.push(l), exit:(c) => exits.push(c), timers });
+  const handle = runScenario(parseScenario(raw), { emit:(l) => lines.push(l), exit:(c) => exits.push(c), timers, evidence });
   return { timers, lines, exits, handle };
 }
 
@@ -36,10 +36,18 @@ test('steps fire in time order with heartbeats', () => {
     'AI_HEARTBEAT',
     'STATE|NO_USER|faces=0|owners=0|unknown=0|best=0.0000',
     'AI_HEARTBEAT',
-    formatState('UNKNOWN_PERSON'),
-    'PHOTO_SAVED|mock-snapshot-2500.jpg',
+    formatState('UNKNOWN_PERSON'), // no photo: security images are opt-in
     'AI_HEARTBEAT'
   ]);
+});
+
+test('security images (opted in): PHOTO|<event>|<base64 JPEG>, numbered per run', () => {
+  const t = run({ heartbeatMs:10000, stateUpdateMs:0, autoTracks:false, steps:[
+    { at:0, state:'UNKNOWN_PERSON', snapshot:true }, { at:100, state:'OWNER_PRESENT' }, { at:200, state:'UNKNOWN_PERSON', snapshot:true }
+  ] }, { on:true });
+  t.timers.advance(300);
+  const photos = t.lines.filter((l) => l.startsWith('PHOTO|'));
+  assert.deepEqual(photos, [`PHOTO|1|${TINY_JPEG}`, `PHOTO|2|${TINY_JPEG}`]);
 });
 
 test('face states repeat like the real backend; NO_USER, errors and hangs stop them', () => {
@@ -54,7 +62,7 @@ test('face states repeat like the real backend; NO_USER, errors and hangs stop t
   assert.deepEqual(t.lines, [
     owner, owner, owner, // 0, 400, 800
     formatState('NO_USER'),
-    formatState('UNKNOWN_PERSON'), 'PHOTO_SAVED|mock-snapshot-2000.jpg',
+    formatState('UNKNOWN_PERSON'),
     formatState('UNKNOWN_PERSON'), formatState('UNKNOWN_PERSON') // 2400, 2800, then hung
   ]);
 

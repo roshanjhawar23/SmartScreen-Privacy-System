@@ -111,6 +111,15 @@ test('Phase 4 events have titles', () => {
   assert.equal(title('PROFILE_CHANGED|profile=Home|source=rule-wifi'), 'Privacy profile: Home');
 });
 
+test('security image events have titles', () => {
+  const title = (raw) => parseLogLine(`2026-10-01T10:00:00.000Z - ${raw}`).title;
+  assert.equal(title('PHOTO_SAVED|event=0a1b2c3d-1'), 'Security image captured');
+  assert.equal(title('PHOTO_DISCARDED|event=0a1b2c3d-1|reason=owner-confirmed|removed=1'), 'Security image deleted — trusted person recognized');
+  assert.equal(title('EVIDENCE_SETTING|enabled=true'), 'Security images turned on');
+  assert.equal(title('EVIDENCE_SETTING|enabled=false'), 'Security images turned off');
+  assert.equal(title('EVIDENCE_MIGRATED|encrypted=30|plaintextDeleted=38'), 'Security images encrypted');
+});
+
 test('log values cannot inject extra lines', () => {
   const line = formatLogLine('LOCK_REQUESTED|reason=x\n2026-01-01T00:00:00.000Z - AI_STATE|STATE|OWNER_PRESENT', new Date(0));
   assert.equal(line.split('\n').filter(Boolean).length, 1);

@@ -121,16 +121,34 @@ or window titles.
   administrator from ending the process or editing the file.
 - **Settings transfer:** see `docs/design/cross-device.md` (passphrase encryption, allow-list, no faces).
 
-## Security images (intruder snapshots)
-- On by default: when an unrecognized face first appears, one photo of the whole scene is saved to
-  `userData/intruder_logs/` (outside the repository, never committed), for the owner's own review.
-- **Small and bounded** (`settings.json → evidence`): downscaled to 320 px wide, JPEG quality 70
-  (about 10–20 KB each), and only the newest 30 are kept; older ones are deleted automatically when a
-  new one is saved and when protection starts. Only SmartScreen's own `YYYYMMDD_HHMMSS_mmm.jpg` files are
-  ever deleted. `"enabled": false` turns the feature off.
-- The images show whoever was in front of the camera, possibly including the owner (e.g. while being
-  re-recognized). They are not encrypted; anyone with access to the Windows account can open them.
-  Diagnostics shows how many are kept and opens the folder.
+## Security images (intruder snapshots) — opt-in, encrypted
+- **Off by default** (`settings.json → evidence.enabled: false`). The owner turns it on in
+  Diagnostics → "Save images". The first time, SmartScreen shows: *"SmartScreen will save small photos
+  of unrecognized people. Make sure people around you are aware."* The choice is stored in
+  `userData/evidence_state.json` and applies at once, also during a running session (the backend is told
+  `EVIDENCE|1` / `EVIDENCE|0`; anything arriving while off is dropped). Taking photos of people may be
+  regulated where you live; the owner is responsible for telling people around them.
+- **What is captured:** one photo of the scene when an unrecognized face first appears, downscaled to
+  320 px wide, JPEG quality 70 (lowered if needed to stay under 40 KB).
+- **Never on disk unencrypted:** the Python backend encodes the JPEG in memory and sends it through the
+  pipe; the Electron main process encrypts it with `safeStorage` (the same OS-backed encryption as the
+  face templates) and writes `userData/evidence/<time>_<run>-<event>.enc`. Images are decrypted only on
+  request for the in-app viewer (Diagnostics → View images), shown from memory and dropped when the
+  viewer closes. There is no "open folder": the files are unreadable outside SmartScreen.
+- **Bounded:** only the newest 30 are kept (`evidence.maxImages`); older ones are deleted on every save.
+  The viewer can delete one image or all of them.
+- **Never the owner:**
+  - each photo belongs to an event (the unknown face tracks that triggered it); if a later recognition
+    in the same event confirms one of those tracks as a trusted person (for example the owner walking in
+    and being recognized a moment later), the backend reports it and the event's photos are deleted
+    (`PHOTO_DISCARDED|…|reason=owner-confirmed`); events close after 60 s;
+  - faces already recognized as trusted in the same frame are blacked out before the photo is encoded.
+  Limit: if the owner is never recognized during the event (e.g. leaves before recognition succeeds), the
+  photo stays; it can be deleted in the viewer.
+- **Earlier versions** stored plaintext JPEGs in `userData/intruder_logs/`. On start, the newest 30 are
+  encrypted into the new store (each checked by reading it back) and every plaintext snapshot is deleted.
+- **Limits of the encryption:** `safeStorage` protects against other Windows accounts and copies of the
+  files; anyone signed in to the same Windows account while SmartScreen is unlocked can view them in the app.
 
 ## Pixelate
 While pixelate is on, the overlay is excluded from screen capture (so it can capture the screen

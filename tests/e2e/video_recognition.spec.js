@@ -84,7 +84,7 @@ test('video: walk-away: owner stays away, screen locks (simulated)', async ({}, 
   expect([...order].sort((a, b) => a - b)).toEqual(order);
 });
 
-test('video: unknown person: threat detected, evidence saved, screen locks (simulated)', async ({}, testInfo) => {
+test('video: unknown person: threat detected, screen locks (simulated)', async ({}, testInfo) => {
   requireFixtures({ scenario:'threat_lock' });
   ctx = await h.launchApp({ scenario:'threat_lock' });
   const { page, logFile } = ctx;
@@ -101,7 +101,7 @@ test('video: unknown person: threat detected, evidence saved, screen locks (simu
   const events = h.readEvents(logFile);
   const threat = events.findIndex((e) => /^AI_STATE\|STATE\|UNKNOWN_(PERSON|GROUP)/.test(e));
   expect(threat).toBeGreaterThan(h.indexOfEvent(events, 'AI_STATE|STATE|OWNER_PRESENT'));
-  expect(h.indexOfEvent(events, 'PHOTO_SAVED|')).toBeGreaterThan(threat);
+  expect(h.indexOfEvent(events, 'PHOTO_SAVED|')).toBe(-1); // security images are opt-in
   expect(h.indexOfEvent(events, 'THREAT_FOCUS_ACTIVATED')).toBeGreaterThan(threat);
   expect(h.indexOfEvent(events, 'LOCK_REQUESTED|reason=privacy-threat')).toBeGreaterThan(h.indexOfEvent(events, 'THREAT_FOCUS_ACTIVATED'));
 });

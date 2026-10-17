@@ -20,7 +20,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDiagnostics:()=>ipcRenderer.invoke('get-diagnostics'),
   exportDiagnostics:()=>ipcRenderer.invoke('export-diagnostics'),
   getEvidenceInfo:()=>ipcRenderer.invoke('get-evidence-info'),
-  openEvidenceFolder:()=>ipcRenderer.invoke('open-evidence-folder'),
+  setEvidenceEnabled:(enabled)=>ipcRenderer.invoke('set-evidence-enabled',enabled),
+  listEvidence:()=>ipcRenderer.invoke('list-evidence'),
+  viewEvidence:(id)=>ipcRenderer.invoke('view-evidence',id),
+  deleteEvidence:(id)=>ipcRenderer.invoke('delete-evidence',id),
+  deleteAllEvidence:()=>ipcRenderer.invoke('delete-all-evidence'),
   getTrustedPeople:()=>ipcRenderer.invoke('get-trusted-people'),
   enrollTrustedPerson:(request)=>ipcRenderer.invoke('enroll-trusted-person',request),
   renameTrustedPerson:(id,name)=>ipcRenderer.invoke('rename-trusted-person',id,name),
@@ -70,6 +74,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onBiometricUpdated:(cb)=>ipcRenderer.on('biometric-updated',cb),
 
   lockScreen:(reason)=>ipcRenderer.send('lock-screen',reason),
-  getLastIntruderImage:()=>ipcRenderer.invoke('get-last-intruder-image'),
   getSecurityEvents:(limit)=>ipcRenderer.invoke('get-security-events',limit)
 });

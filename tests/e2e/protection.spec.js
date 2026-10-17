@@ -70,7 +70,7 @@ for(const [mock, label] of [
   ['unknown_group', 'Unrecognized people'],
   ['owner_and_unknown', 'Owner + unrecognized person']
 ]){
-  test(`threat (${mock}): blur, focus, evidence, simulated lock`, async ({}, testInfo) => {
+  test(`threat (${mock}): blur, focus, simulated lock; no security image by default`, async ({}, testInfo) => {
     const { page, logFile } = await start(mock);
     await expect(identity()).toHaveText('Owner verified');
     await expect(identity()).toHaveText(label);
@@ -82,10 +82,11 @@ for(const [mock, label] of [
     await h.snap(page, testInfo, '2-locked');
     const state = { threat_lock:'UNKNOWN_PERSON', unknown_group:'UNKNOWN_GROUP', owner_and_unknown:'OWNER_AND_UNKNOWN' }[mock];
     h.expectEventOrder(h.readEvents(logFile), [
-      'AI_STATE|STATE|OWNER_PRESENT', `AI_STATE|STATE|${state}`, 'PHOTO_SAVED|',
+      'AI_STATE|STATE|OWNER_PRESENT', `AI_STATE|STATE|${state}`,
       'THREAT_FOCUS_ACTIVATED', 'THREAT_LOCK_TRIGGERED', 'LOCK_REQUESTED|reason=privacy-threat',
       'TEST_LOCK_SIMULATED|reason=privacy-threat'
     ]);
+    expect(h.readEvents(logFile).some((e) => e.startsWith('PHOTO_SAVED|'))).toBe(false); // opt-in
   });
 }
 

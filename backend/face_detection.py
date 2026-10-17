@@ -1,4 +1,5 @@
 import argparse
+import base64
 import json
 import os
 import sys
@@ -17,9 +18,9 @@ from monitor_core import (
     CameraHealth,
     Emitter,
     EvidenceConfig,
+    EvidenceEvents,
     FrameObservation,
     ImageHealth,
-    evidence_to_delete,
     StatsAccumulator,
     apply_track_identity,
     LoopHeartbeat,
@@ -29,6 +30,8 @@ from monitor_core import (
 
 
 STOP_EVENT = threading.Event()
+# Security images on/off; main can change it mid-session ("EVIDENCE|0" / "EVIDENCE|1" on stdin).
+EVIDENCE_ON = threading.Event()
 emit = Emitter()
 
 HEARTBEAT_INTERVAL = 2.0
@@ -111,44 +114,51 @@ def read_startup_config() -> dict:
     return parse_config(raw)
 
 
+def handle_command(line: str, stop_event: threading.Event, evidence_on: threading.Event) -> bool:
+    """One stdin line from Electron. Returns False when the loop must stop."""
+    command = line.strip()
+    if not line or command == "STOP":  # EOF: the Electron parent is gone
+        stop_event.set()
+        return False
+    if command == "EVIDENCE|1":
+        evidence_on.set()
+    elif command == "EVIDENCE|0":
+        evidence_on.clear()
+    return True
+
+
 def stop_listener() -> None:
     while not STOP_EVENT.is_set():
-        line = sys.stdin.readline()
-        # EOF means the Electron parent is gone; release the camera instead of running orphaned.
-        if not line or line.strip() == "STOP":
-            STOP_EVENT.set()
+        if not handle_command(sys.stdin.readline(), STOP_EVENT, EVIDENCE_ON):
             return
 
 
-def prune_evidence(log_dir: str, keep: int) -> int:
-    """Delete the oldest snapshots beyond the newest ``keep``. Returns how many were deleted."""
-    try:
-        names = os.listdir(log_dir)
-    except OSError:
-        return 0
-    deleted = 0
-    for name in evidence_to_delete(names, keep):
-        try:
-            os.remove(os.path.join(log_dir, name))
-            deleted += 1
-        except OSError:
-            pass
-    return deleted
+def encode_snapshot(frame: np.ndarray, evidence: EvidenceConfig, mask_boxes=()) -> bytes | None:
+    """Small in-memory JPEG of the scene for a security image. Never written to disk here.
 
-
-def save_intruder_snapshot(frame: np.ndarray, log_dir: str, evidence: EvidenceConfig = EvidenceConfig()) -> str | None:
-    """Small JPEG of the whole scene (downscaled to max_width), then keep only the newest images."""
-    os.makedirs(log_dir, exist_ok=True)
-    height, width = frame.shape[:2]
+    Owner faces (mask_boxes) are blacked out first: SmartScreen never keeps a photo of the owner.
+    The width is reduced to max_width and the quality lowered until the file fits max_bytes.
+    """
+    image = frame.copy()
+    height, width = image.shape[:2]
+    for box in mask_boxes or ():
+        x, y, w, h = (float(v) for v in box)
+        pad_w, pad_h = w * 0.2, h * 0.2
+        x0, y0 = max(0, int(x - pad_w)), max(0, int(y - pad_h))
+        x1, y1 = min(width, int(x + w + pad_w)), min(height, int(y + h + pad_h))
+        image[y0:y1, x0:x1] = 0
     if width > evidence.max_width:
         scale = evidence.max_width / float(width)
-        frame = cv2.resize(frame, (evidence.max_width, max(1, int(round(height * scale)))), interpolation=cv2.INTER_AREA)
-    filename = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3] + ".jpg"
-    path = os.path.join(log_dir, filename)
-    if not cv2.imwrite(path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), evidence.jpeg_quality]):
-        return None
-    prune_evidence(log_dir, evidence.max_images)
-    return path
+        image = cv2.resize(image, (evidence.max_width, max(1, int(round(height * scale)))), interpolation=cv2.INTER_AREA)
+    quality = evidence.jpeg_quality
+    while quality >= 30:
+        ok, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+        if not ok:
+            return None
+        if len(buffer) <= evidence.max_bytes:
+            return buffer.tobytes()
+        quality -= 10
+    return None
 
 
 def heartbeat_loop(heartbeat: LoopHeartbeat, stop_event: threading.Event, clock=time.monotonic) -> None:
@@ -229,7 +239,8 @@ def observe_frame(frame, detector, recognizer, owner_templates, config, now=0.0)
     return obs
 
 
-def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None, clock=time.monotonic, sleep=time.sleep):
+def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None, clock=time.monotonic, sleep=time.sleep,
+                evidence_on: threading.Event | None = None):
     """Vision loop. Returns normally on stop; raises CameraError when frames stop arriving."""
     owner_templates = np.asarray(config["templates"], dtype=np.float32)
     process_every_n = int(config["processEveryN"])
@@ -241,7 +252,11 @@ def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None
     )
     camera_health = CameraHealth(failure_timeout=float(config["cameraFailureTimeout"]))
     image_health = ImageHealth(failure_timeout=float(config["cameraFailureTimeout"]))
-    prune_evidence(config["logDir"], config["evidence"].max_images)  # also trims older, larger sets
+    if evidence_on is None:
+        evidence_on = threading.Event()
+        if config["evidence"].enabled:
+            evidence_on.set()
+    evidence_events = EvidenceEvents()
     face_tracker = FaceTracker(owner_threshold=float(config["threshold"]), liveness_config=config["liveness"])
     stats = StatsAccumulator(float(config["statsInterval"]), now=clock(), cpu_now=time.process_time())
     frame_counter = 0
@@ -287,16 +302,21 @@ def run_monitor(camera, detector, recognizer, config, stop_event, heartbeat=None
         for track_id, state, reason in face_tracker.pop_liveness_changes():
             emit(f"LIVENESS|track={track_id}|state={state}|reason={reason}")
         apply_track_identity(obs)
+        for event_id in evidence_events.check(now, obs.tracks):
+            emit(f"PHOTO_DISCARD|{event_id}|reason=owner-confirmed")
         stats.processed((time.perf_counter() - started) * 1000.0)
         event = tracker.update(now, obs)
         if event is None:
             continue
 
         emit(event.message)
-        if event.snapshot and config["evidence"].enabled:
-            snapshot_path = save_intruder_snapshot(frame, config["logDir"], config["evidence"])
-            if snapshot_path:
-                emit(f"PHOTO_SAVED|{snapshot_path}")
+        if event.snapshot and evidence_on.is_set():
+            owners = [t.box for t in obs.tracks if t.role == OWNER and t.box]
+            unknown_ids = [t.id for t in obs.tracks if t.role != OWNER]
+            data = encode_snapshot(frame, config["evidence"], owners)
+            if data:
+                event_id = evidence_events.open(now, unknown_ids)
+                emit(f"PHOTO|{event_id}|{base64.b64encode(data).decode('ascii')}")
             else:
                 emit("PHOTO_SAVE_FAILED")
 
@@ -353,7 +373,9 @@ def main() -> None:
     threading.Thread(target=heartbeat_loop, args=(heartbeat, STOP_EVENT), daemon=True).start()
 
     try:
-        run_monitor(camera, detector, recognizer, config, STOP_EVENT, heartbeat)
+        if config["evidence"].enabled:
+            EVIDENCE_ON.set()
+        run_monitor(camera, detector, recognizer, config, STOP_EVENT, heartbeat, evidence_on=EVIDENCE_ON)
     finally:
         camera.release()
 

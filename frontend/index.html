@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self' blob:;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self' blob:; img-src 'self' data:;">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SmartScreen</title>
 <link rel="stylesheet" href="style.css">
@@ -96,9 +96,20 @@
         <span>Security images</span><span id="diagEvidence">—</span>
       </div>
       <div class="diag-actions">
-        <button id="diagExportBtn" type="button">Export diagnostics</button>
-        <button id="evidenceFolderBtn" type="button">Open images folder</button>
+        <button id="evidenceToggleBtn" type="button" aria-pressed="false">Save images: Off</button>
+        <button id="evidenceViewBtn" type="button" aria-expanded="false">View images</button>
       </div>
+      <div id="evidenceViewer" class="evidence-viewer" hidden>
+        <img id="evidenceImg" alt="Security image">
+        <div id="evidenceCaption" class="manage-note"></div>
+        <div class="evidence-actions">
+          <button id="evidencePrevBtn" type="button">Previous</button>
+          <button id="evidenceNextBtn" type="button">Next</button>
+          <button id="evidenceDeleteBtn" type="button">Delete</button>
+          <button id="evidenceDeleteAllBtn" type="button">Delete all</button>
+        </div>
+      </div>
+      <button id="diagExportBtn" type="button">Export diagnostics</button>
     </div>
 
     <div id="managePanel" class="manage-panel" hidden>

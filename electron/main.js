@@ -1,4 +1,4 @@
-const { app, BrowserWindow, globalShortcut, ipcMain, Tray, Menu, dialog, session, safeStorage, screen, desktopCapturer, powerMonitor, shell } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, Tray, Menu, dialog, session, safeStorage, screen, desktopCapturer, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
@@ -19,6 +19,7 @@ const { createActiveWindowReader } = require('./active_window');
 const { FAILSAFE_KINDS, configDigest, createClockMonitor, createRestartLoopDetector, diffDevices } = require('./tamper');
 const { createDiagnostics } = require('./diagnostics');
 const { createTrustedStore } = require('./trusted_people');
+const { createEvidenceStore } = require('./evidence_store');
 const profileStore = require('./profile_store');
 const { createAutoSwitcher, parseNetshSsid } = require('./profile_rules');
 const enterprise = require('./enterprise_policy');
@@ -62,7 +63,7 @@ let tray = null;
 let shortcutsRegistered = false;
 let ignoringMouse = true;
 let pythonProcess = null;
-let lastIntruderImage = '';
+let evidenceRun = '';           // id of the current backend run (event ids restart per run)
 let lastAIHeartbeat = 0;     // monotonic ms (performance.now): immune to system clock changes
 let aiWatchdog = null;
 let aiFailureReported = false;
@@ -1159,8 +1160,7 @@ function startAI(){
     writeLog(`TEST_MOCK_BACKEND|${path.basename(process.env.SMARTSCREEN_MOCK_BACKEND)}`);
   }
 
-  const logPath = path.join(app.getPath('userData'),'intruder_logs');
-  fs.mkdirSync(logPath,{recursive:true});
+  evidenceRun = crypto.randomBytes(4).toString('hex');
 
   const child = spawn(runPath,args,{stdio:['pipe','pipe','pipe'],windowsHide:true,env:spawnEnv});
   pythonProcess=child;
@@ -1178,8 +1178,7 @@ function startAI(){
     cameraFailureTimeout: Math.max(0.5, Number(cfg.cameraFailureTimeout ?? 3)),
     stateUpdateInterval: Math.max(0, Number(cfg.aiStateUpdateInterval ?? 0.4)),
     headPose: cfg.headPose || {},
-    evidence: cfg.evidence || {},
-    logDir: logPath
+    evidence: { ...(cfg.evidence || {}), enabled:evidenceEnabled() }, // images never touch the disk in Python
   };
   // The backend ignores cameraSource unless SMARTSCREEN_TEST=1 is set too.
   if(TEST_MODE && process.env.SMARTSCREEN_CAMERA_SOURCE){
@@ -1205,10 +1204,10 @@ function startAI(){
       logPoseAndLiveness(payload);
       lastAIState = payload.state;
       sendAIState(payload);
-    }else if(msg.startsWith('PHOTO_SAVED|')){
-      lastIntruderImage=msg.split('|').slice(1).join('|') || '';
-      writeLog(msg);
-      win.webContents.send('ai-photo-saved',{path:lastIntruderImage});
+    }else if(msg.startsWith('PHOTO|')){
+      handlePhoto(msg);
+    }else if(msg.startsWith('PHOTO_DISCARD|')){
+      handlePhotoDiscard(msg);
     }else if(msg.startsWith('LIVENESS|')){
       writeLog(msg.slice(0, 120));
     }else if(msg.startsWith('STATS|')){
@@ -1472,25 +1471,128 @@ ipcMain.on('lock-screen',(_event, reason)=>{
   lockScreen(typeof reason === 'string' ? reason : 'manual');
 });
 ipcMain.handle('get-security-events',(_event,limit)=>readSecurityEvents(activityLogFile(),limit));
-ipcMain.handle('get-last-intruder-image',()=>lastIntruderImage);
+// ---------------------------------------------------------------------------
+// Security images (opt-in). Small JPEGs from the backend, encrypted with safeStorage like the
+// face templates, decrypted only for the in-app viewer. Newest evidence.maxImages kept.
+const EVIDENCE_NOTICE = 'SmartScreen will save small photos of unrecognized people. Make sure people around you are aware.';
+let evidenceStoreInstance = null;
 
-// Security images (intruder snapshots): count and the folder, for the owner. Small JPEGs; the
-// backend keeps only the newest evidence.maxImages.
-const EVIDENCE_NAME = /^\d{8}_\d{6}_\d{3}\.jpg$/;
-function evidenceFolder(){
-  return path.join(app.getPath('userData'),'intruder_logs');
+function evidenceStateFile(){
+  return path.join(app.getPath('userData'), 'evidence_state.json');
 }
-ipcMain.handle('get-evidence-info',()=>{
+
+function evidenceState(){
+  try{ return JSON.parse(fs.readFileSync(evidenceStateFile(), 'utf8')) || {}; }catch{ return {}; }
+}
+
+// The owner's choice (userData) wins over the shipped default (settings.json: off).
+function evidenceEnabled(){
+  const state = evidenceState();
+  if(typeof state.enabled === 'boolean') return state.enabled;
+  return effectiveSettings().evidence?.enabled === true;
+}
+
+function evidenceStore(){
+  if(!evidenceStoreInstance){
+    evidenceStoreInstance = createEvidenceStore({
+      dir:path.join(app.getPath('userData'), 'evidence'),
+      encrypt:(text) => safeStorage.encryptString(text),
+      decrypt:(buffer) => safeStorage.decryptString(buffer),
+      fs,
+      maxImages:() => Number(effectiveSettings().evidence?.maxImages ?? 30)
+    });
+  }
+  return evidenceStoreInstance;
+}
+
+// Earlier versions kept plaintext JPEGs in userData/intruder_logs: encrypt the newest, delete all.
+function migrateLegacyEvidence(){
+  if(!safeStorage.isEncryptionAvailable()) return;
+  try{
+    const result = evidenceStore().migrateLegacy(path.join(app.getPath('userData'), 'intruder_logs'));
+    if(result.deleted > 0) writeLog(`EVIDENCE_MIGRATED|encrypted=${result.encrypted}|plaintextDeleted=${result.deleted}`);
+  }catch(error){
+    writeLog(`EVIDENCE_MIGRATION_ERROR|${error.message}`);
+  }
+}
+
+function evidenceInfo(){
   let count = 0;
-  try{ count = fs.readdirSync(evidenceFolder()).filter((n)=>EVIDENCE_NAME.test(n)).length; }catch{}
-  const evidence = effectiveSettings().evidence || {};
-  return { count, maxImages:Number(evidence.maxImages ?? 30), enabled:evidence.enabled !== false };
+  try{ count = safeStorage.isEncryptionAvailable() ? evidenceStore().count() : 0; }catch{}
+  return { count, maxImages:Number(effectiveSettings().evidence?.maxImages ?? 30), enabled:evidenceEnabled() };
+}
+
+function handlePhoto(msg){
+  const [, event, data] = msg.split('|');
+  if(!evidenceEnabled() || !safeStorage.isEncryptionAvailable()) return; // switched off: drop it
+  try{
+    evidenceStore().save({ run:evidenceRun, event, jpeg:Buffer.from(data || '', 'base64') });
+    writeLog(`PHOTO_SAVED|event=${evidenceRun}-${event}`);
+    win?.webContents.send('ai-photo-saved', { event });
+  }catch(error){
+    writeLog(`PHOTO_SAVE_FAILED|${error.message}`);
+  }
+}
+
+function handlePhotoDiscard(msg){
+  const [, event, reasonField = ''] = msg.split('|');
+  try{
+    const removed = safeStorage.isEncryptionAvailable() ? evidenceStore().discardEvent(evidenceRun, event) : 0;
+    writeLog(`PHOTO_DISCARDED|event=${evidenceRun}-${event}|${reasonField}|removed=${removed}`);
+  }catch(error){
+    writeLog(`PHOTO_DISCARD_FAILED|${error.message}`);
+  }
+}
+
+ipcMain.handle('get-evidence-info',()=>evidenceInfo());
+
+ipcMain.handle('set-evidence-enabled',async(_event, enabled)=>{
+  const on = enabled === true;
+  const state = evidenceState();
+  if(on && !state.noticeShown){
+    const answer = await dialog.showMessageBox(win && !win.isDestroyed() ? win : undefined, {
+      type:'info', buttons:['Cancel','Turn on'], defaultId:1, cancelId:0, noLink:true,
+      title:'Security images', message:EVIDENCE_NOTICE
+    });
+    if(answer.response !== 1) return { ok:false, cancelled:true, ...evidenceInfo() };
+  }
+  fs.writeFileSync(evidenceStateFile(), JSON.stringify({ ...state, enabled:on, noticeShown:Boolean(state.noticeShown || on) }));
+  if(pythonProcess){ try{ pythonProcess.stdin.write(`EVIDENCE|${on ? 1 : 0}\n`); }catch{} }
+  writeLog(`EVIDENCE_SETTING|enabled=${on}`);
+  return { ok:true, ...evidenceInfo() };
 });
-ipcMain.handle('open-evidence-folder',async()=>{
-  fs.mkdirSync(evidenceFolder(),{recursive:true});
-  const error = await shell.openPath(evidenceFolder());
-  if(!error) writeLog('EVIDENCE_FOLDER_OPENED');
-  return { ok:!error, error:error || null };
+
+ipcMain.handle('list-evidence',()=>{
+  try{ return { ok:true, images:evidenceStore().list() }; }catch(error){ return { ok:false, error:error.message, images:[] }; }
+});
+
+ipcMain.handle('view-evidence',(_event, id)=>{
+  try{
+    const jpeg = evidenceStore().read(String(id));
+    writeLog('EVIDENCE_VIEWED');
+    return { ok:true, src:`data:image/jpeg;base64,${jpeg.toString('base64')}` };
+  }catch(error){ return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('delete-evidence',(_event, id)=>{
+  try{
+    evidenceStore().remove(String(id));
+    writeLog('EVIDENCE_DELETED|count=1');
+    return { ok:true, ...evidenceInfo() };
+  }catch(error){ return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('delete-all-evidence',async()=>{
+  const answer = await dialog.showMessageBox(win && !win.isDestroyed() ? win : undefined, {
+    type:'warning', buttons:['Cancel','Delete all'], defaultId:0, cancelId:0, noLink:true,
+    title:'Security images', message:'Delete all security images? This cannot be undone.'
+  });
+  if(answer.response !== 1) return { ok:false, cancelled:true, ...evidenceInfo() };
+  try{
+    const removed = evidenceStore().clear();
+    writeLog(`EVIDENCE_DELETED|count=${removed}`);
+    return { ok:true, ...evidenceInfo() };
+  }catch(error){ return { ok:false, error:error.message }; }
 });
 
 app.on('second-instance',()=>{
@@ -1557,6 +1659,7 @@ app.whenReady().then(()=>{
 
   startConfigIntegrity();
   ensureTrustedPeople();
+  migrateLegacyEvidence();
   const ruleInterval = Math.max(1000, Number(effectiveSettings().profileRuleIntervalMs ?? 30000) || 30000);
   setInterval(()=>{ autoSwitcher.evaluate().catch(()=>{}); }, ruleInterval);
   autoSwitcher.evaluate().catch(()=>{});

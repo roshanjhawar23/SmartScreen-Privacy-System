@@ -26,7 +26,7 @@
     "glancingPitch": 35
   },
   "evidence": {
-    "enabled": true,
+    "enabled": false,
     "maxImages": 30,
     "maxWidth": 320,
     "jpegQuality": 70

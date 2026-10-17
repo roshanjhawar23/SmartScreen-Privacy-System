@@ -55,6 +55,7 @@ class TrackView:
     liveness: str = LIVENESS_UNKNOWN
     size: float = 0.0
     score: float = -1.0  # median owner similarity (not encoded)
+    box: tuple | None = None  # x, y, w, h in frame pixels (not encoded; used to mask the owner)
 
     def encode(self) -> str:
         role = "O" if self.role == OWNER else "U"
@@ -192,7 +193,7 @@ class FaceTracker:
         start = lambda since: None if since is None else max(since, t.role_since)  # noqa: E731
         ms = lambda since: int(round((now - since) * 1000)) if since is not None else 0  # noqa: E731
         return TrackView(t.id, role, d.facing, d.yaw, d.pitch, ms(start(t.first_seen)), ms(start(t.facing_since)),
-                         ms(start(t.looking_since)), t.liveness_state, d.size, score)
+                         ms(start(t.looking_since)), t.liveness_state, d.size, score, t.box)
 
 
 def primary_track(views: list[TrackView]) -> TrackView | None:

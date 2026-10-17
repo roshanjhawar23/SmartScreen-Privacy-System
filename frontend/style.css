@@ -84,7 +84,12 @@ body.secondary-overlay #control,body.secondary-overlay #aiWarning{display:none!i
 .diag-panel[hidden]{display:none}
 .diag-grid{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:9px;color:#bcc3cb}
 .diag-grid span:nth-child(even){color:#e2e6eb;text-align:right;font-variant-numeric:tabular-nums}
-#control #diagExportBtn,#control #evidenceFolderBtn{height:26px}
+#control #diagExportBtn,#control .diag-actions button{height:26px}
+.evidence-viewer{display:flex;flex-direction:column;gap:4px}
+.evidence-viewer[hidden]{display:none}
+#evidenceImg{width:100%;border-radius:6px;background:#0b0c0e;min-height:40px;object-fit:contain}
+.evidence-actions{display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
+#control .evidence-actions button{height:24px;padding:0 4px;font-size:9px}
 .diag-actions{display:grid;grid-template-columns:1fr 1fr;gap:4px}
 .manage-panel{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px}
 .manage-panel[hidden]{display:none}

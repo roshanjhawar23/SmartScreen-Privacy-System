@@ -497,8 +497,7 @@ async function refreshDiagnostics() {
     setText('diagCpu', `${b ? n(b.cpu, 0) : '—'} % / ${n(d.electron?.cpuPercent, 0)} %`);
     setText('diagThreats', `${c.threats ?? 0} / ${c.lockRequests ?? 0}`);
     setText('diagTamper', `${c.failsafes ?? 0} / ${c.tamperEvents ?? 0}`);
-    const evidence = await window.electronAPI.getEvidenceInfo();
-    if (evidence) setText('diagEvidence', evidence.enabled ? `${evidence.count} of ${evidence.maxImages} kept` : 'off');
+    renderEvidenceInfo(await window.electronAPI.getEvidenceInfo());
   } catch {}
 }
 
@@ -515,9 +514,70 @@ diagBtn?.addEventListener('click', () => {
   }
 });
 
-document.getElementById('evidenceFolderBtn')?.addEventListener('click', async () => {
-  const result = await window.electronAPI.openEvidenceFolder();
-  if (!result?.ok) showSecurityNotification('Could not open the images folder');
+// Security images (opt-in, encrypted; decrypted only here, on request).
+const evidenceToggleBtn = document.getElementById('evidenceToggleBtn');
+const evidenceViewBtn = document.getElementById('evidenceViewBtn');
+const evidenceViewer = document.getElementById('evidenceViewer');
+const evidenceImg = document.getElementById('evidenceImg');
+let evidenceInfoState = { enabled:false, count:0, maxImages:30 };
+let evidenceList = [];
+let evidenceIndex = 0;
+
+function renderEvidenceInfo(info) {
+  if (!info) return;
+  evidenceInfoState = info;
+  setText('diagEvidence', `${info.count} of ${info.maxImages} kept · ${info.enabled ? 'on' : 'off'}`);
+  if (evidenceToggleBtn) {
+    evidenceToggleBtn.textContent = `Save images: ${info.enabled ? 'On' : 'Off'}`;
+    updateButtonState(evidenceToggleBtn, info.enabled);
+  }
+}
+
+async function showEvidence(index) {
+  if (!evidenceViewer || !evidenceImg) return;
+  if (evidenceList.length === 0) {
+    evidenceImg.removeAttribute?.('src');
+    setText('evidenceCaption', 'No security images.');
+    return;
+  }
+  evidenceIndex = Math.min(Math.max(0, index), evidenceList.length - 1);
+  const item = evidenceList[evidenceIndex];
+  const result = await window.electronAPI.viewEvidence(item.id);
+  if (result?.ok) evidenceImg.src = result.src;
+  const when = new Date(item.takenAt);
+  setText('evidenceCaption', `${evidenceIndex + 1} / ${evidenceList.length} · ${Number.isNaN(when.getTime()) ? '' : when.toLocaleString()}`);
+}
+
+async function reloadEvidence(index = 0) {
+  const result = await window.electronAPI.listEvidence();
+  evidenceList = result?.images || [];
+  await showEvidence(index);
+  renderEvidenceInfo(await window.electronAPI.getEvidenceInfo());
+}
+
+evidenceToggleBtn?.addEventListener('click', async () => {
+  renderEvidenceInfo(await window.electronAPI.setEvidenceEnabled(!evidenceInfoState.enabled));
+});
+
+evidenceViewBtn?.addEventListener('click', async () => {
+  const open = Boolean(evidenceViewer?.hidden);
+  if (evidenceViewer) evidenceViewer.hidden = !open;
+  evidenceViewBtn.setAttribute('aria-expanded', String(open));
+  if (open) await reloadEvidence(0);
+  else if (evidenceImg) evidenceImg.removeAttribute?.('src'); // drop the decrypted image
+});
+
+document.getElementById('evidencePrevBtn')?.addEventListener('click', () => showEvidence(evidenceIndex - 1));
+document.getElementById('evidenceNextBtn')?.addEventListener('click', () => showEvidence(evidenceIndex + 1));
+document.getElementById('evidenceDeleteBtn')?.addEventListener('click', async () => {
+  const item = evidenceList[evidenceIndex];
+  if (!item) return;
+  const result = await window.electronAPI.deleteEvidence(item.id);
+  if (result?.ok) await reloadEvidence(evidenceIndex);
+});
+document.getElementById('evidenceDeleteAllBtn')?.addEventListener('click', async () => {
+  const result = await window.electronAPI.deleteAllEvidence();
+  if (result?.ok) await reloadEvidence(0);
 });
 
 diagExportBtn?.addEventListener('click', async () => {

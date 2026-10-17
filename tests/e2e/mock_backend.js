@@ -2,7 +2,9 @@
 // main.js spawns it when SMARTSCREEN_TEST=1 and SMARTSCREEN_MOCK_BACKEND=<scenario.json>.
 //
 // Speaks the same line protocol: reads one JSON config line on stdin, then STOP
-// (or EOF), and emits AI_READY / AI_HEARTBEAT / STATE|... / PHOTO_SAVED|... / AI_ERROR|...
+// (or EOF), and emits AI_READY / AI_HEARTBEAT / STATE|... / PHOTO|... / AI_ERROR|...
+// Snapshots follow the real backend: sent only while security images are on (config
+// evidence.enabled, or "EVIDENCE|1" / "EVIDENCE|0" on stdin), as PHOTO|<event>|<base64 JPEG>.
 //
 // Scenario file:
 // {
@@ -28,6 +30,9 @@ const STATE_COUNTS = {
   UNKNOWN_GROUP:{ faces:2, owners:0, unknown:2 },
   OWNER_AND_UNKNOWN:{ faces:2, owners:1, unknown:1 }
 };
+
+// 8×8 grey JPEG (valid file, tiny).
+const TINY_JPEG = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAAIAAgBAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/APn+iiigD//Z';
 
 function formatState(state, overrides = {}){
   const counts = { ...(STATE_COUNTS[state] || { faces:1, owners:0, unknown:1 }), ...overrides };
@@ -86,8 +91,9 @@ function parseScenario(raw){
 }
 
 // Pure scheduler: timers and output are injected so it can be unit-tested.
-function runScenario(scenario, { emit, exit, timers = { setTimeout, clearTimeout, setInterval, clearInterval } }){
+function runScenario(scenario, { emit, exit, timers = { setTimeout, clearTimeout, setInterval, clearInterval }, evidence = { on:false } }){
   const handles = [];
+  let photoEvent = 0;
   let heartbeat = null;
   let repeat = null;
   let stopped = false;
@@ -101,7 +107,7 @@ function runScenario(scenario, { emit, exit, timers = { setTimeout, clearTimeout
     const tracks = step.tracks || (scenario.autoTracks ? DEFAULT_TRACKS[step.state] : null);
     const line = (elapsedMs) => formatState(step.state, step.counts) + formatTracks(tracks, elapsedMs);
     emit(line(0));
-    if(step.snapshot) emit(`PHOTO_SAVED|mock-snapshot-${step.at}.jpg`);
+    if(step.snapshot && evidence.on) emit(`PHOTO|${++photoEvent}|${TINY_JPEG}`);
     if(scenario.stateUpdateMs > 0 && step.state !== 'NO_USER'){
       let count = 0;
       repeat = timers.setInterval(() => emit(line(++count * scenario.stateUpdateMs)), scenario.stateUpdateMs);
@@ -146,6 +152,7 @@ function main(){
   const out = (line) => process.stdout.write(`${line}\n`);
   let pending = '';
   let configured = false;
+  const evidence = { on:false };
   let run = null;
 
   process.stdin.on('data', (chunk) => {
@@ -157,6 +164,7 @@ function main(){
         configured = true;
         try{
           const config = JSON.parse(line);
+          evidence.on = config.evidence?.enabled === true;
           // Phase 4: one template per trusted person ("templates"); "template" is the older form.
           const templates = Array.isArray(config.templates) ? config.templates : (Array.isArray(config.template) ? [config.template] : []);
           if(templates.length === 0 || !templates.every((t) => Array.isArray(t) && t.length > 0)) throw new Error('template missing');
@@ -164,7 +172,9 @@ function main(){
           out(`AI_ERROR|AI_UNAVAILABLE|Invalid AI configuration: ${error.message}`);
           process.exit(1);
         }
-        run = runScenario(scenario, { emit:out, exit:(code) => process.exit(code) });
+        run = runScenario(scenario, { emit:out, exit:(code) => process.exit(code), evidence });
+      }else if(line.trim() === 'EVIDENCE|1' || line.trim() === 'EVIDENCE|0'){
+        evidence.on = line.trim() === 'EVIDENCE|1';
       }else if(line.trim() === 'STOP'){
         run?.stop(0);
       }
@@ -176,4 +186,4 @@ function main(){
 
 if(require.main === module) main();
 
-module.exports = { formatState, formatTracks, parseScenario, runScenario };
+module.exports = { formatState, formatTracks, parseScenario, runScenario, TINY_JPEG };

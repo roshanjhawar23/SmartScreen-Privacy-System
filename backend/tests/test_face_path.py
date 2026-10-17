@@ -73,13 +73,14 @@ class Recognizer:
         return other.reshape(1, 128)
 
 
-def run(tmp_path, monkeypatch, recognizer, detector=None, seconds=10.0):
+def run(tmp_path, monkeypatch, recognizer, detector=None, seconds=10.0, evidence=None):
     lines = []
     monkeypatch.setattr(face_detection, "emit", lines.append)
     clock = Clock()
     config = face_detection.parse_config({
         "template": TEMPLATE.tolist(), "processEveryN": 3, "confirmFrames": 3,
         "cameraFailureTimeout": 1.0, "logDir": str(tmp_path), "statsInterval": 5,
+        "evidence": evidence or {},
     })
     try:
         face_detection.run_monitor(Camera(clock, seconds), detector or Detector(), recognizer, config,
@@ -107,13 +108,25 @@ def test_owner_face_path_end_to_end(tmp_path, monkeypatch):
     assert not any(line.startswith("PHOTO_SAVED|") for line in lines)
 
 
-def test_unknown_face_path_saves_evidence_once(tmp_path, monkeypatch):
+def test_unknown_face_path_security_images_are_opt_in(tmp_path, monkeypatch):
     lines = run(tmp_path, monkeypatch, Recognizer(owner=False), seconds=4.0)
     unknown = states(lines)
     assert unknown and all(s.startswith("STATE|UNKNOWN_PERSON|faces=1|owners=0|unknown=1") for s in unknown)
     assert ":U:FACING_SCREEN:" in unknown[0]
-    assert sum(line.startswith("PHOTO_SAVED|") for line in lines) == 1
-    assert len(list(tmp_path.iterdir())) == 1
+    assert not any(line.startswith("PHOTO") for line in lines)  # off by default
+    assert list(tmp_path.iterdir()) == []  # the backend never writes images
+
+
+def test_unknown_face_path_sends_one_encoded_image_when_enabled(tmp_path, monkeypatch):
+    import base64
+
+    lines = run(tmp_path, monkeypatch, Recognizer(owner=False), seconds=4.0, evidence={"enabled": True})
+    photos = [line for line in lines if line.startswith("PHOTO|")]
+    assert len(photos) == 1
+    _, event_id, data = photos[0].split("|", 2)
+    jpeg = base64.b64decode(data)
+    assert event_id == "1" and jpeg[:2] == bytes([0xFF, 0xD8]) and len(jpeg) <= 40_000  # JPEG magic
+    assert list(tmp_path.iterdir()) == []  # still nothing on disk
 
 
 def test_still_face_stays_liveness_unknown(tmp_path, monkeypatch):
