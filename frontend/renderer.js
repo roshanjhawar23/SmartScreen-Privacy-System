@@ -709,39 +709,94 @@ window.electronAPI.onAIStopped(() => {
 
 window.electronAPI.onAIPhotoSaved(() => {});
 
-// Panel dragging: only from the header (not the slider or buttons), with pointer
-// capture so the drag keeps tracking outside the panel.
+// Panel dragging: from the header or any empty part of the panel (never from buttons,
+// inputs, sliders or the scrollbar), with pointer capture so the drag keeps tracking
+// outside the panel. Released within 24 px of a screen edge it snaps onto it; the
+// position is remembered (localStorage lives in userData) and clamped on restore.
+const PanelPosition = window.SmartScreenPanelPosition;
+const PANEL_POSITION_KEY = 'smartscreen.panelPosition';
 let dragging = false;
+let dragMoved = false;
+let dragStartX = 0;
+let dragStartY = 0;
 let offsetX = 0;
 let offsetY = 0;
 
-panelHeader?.addEventListener('pointerdown', (event) => {
-  if (event.button !== 0 || event.target.closest('button, input, select')) return;
+function panelSize() {
+  return { width: control.offsetWidth, height: control.offsetHeight };
+}
+
+function viewportSize() {
+  return { width: window.innerWidth, height: window.innerHeight };
+}
+
+let panelPos = null; // last placed {x, y}; null while the CSS default placement applies
+
+function placePanel(pos) {
+  panelPos = pos;
+  control.style.left = `${pos.x}px`;
+  control.style.top = `${pos.y}px`;
+  control.style.right = 'auto';
+}
+
+function savePanelPosition() {
+  try { window.localStorage.setItem(PANEL_POSITION_KEY, PanelPosition.serialize(panelPos)); } catch {}
+}
+
+function restorePanelPosition() {
+  if (!control || isSecondaryOverlay) return;
+  let stored = null;
+  try { stored = PanelPosition.parseStored(window.localStorage.getItem(PANEL_POSITION_KEY)); } catch {}
+  if (stored) placePanel(PanelPosition.clampPosition(stored, panelSize(), viewportSize()));
+}
+
+function onPanelScrollbar(event) {
+  return event.target === control && event.offsetX >= control.clientWidth;
+}
+
+control?.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || event.target.closest(PanelPosition.NO_DRAG_SELECTOR) || onPanelScrollbar(event)) return;
   dragging = true;
+  dragMoved = false;
+  dragStartX = event.clientX;
+  dragStartY = event.clientY;
   offsetX = event.clientX - control.offsetLeft;
   offsetY = event.clientY - control.offsetTop;
-  panelHeader.classList.add('is-dragging');
-  beginPointerGesture(event, panelHeader);
+  control.classList.add('is-dragging');
+  panelHeader?.classList.add('is-dragging');
+  beginPointerGesture(event, control);
 });
 
-panelHeader?.addEventListener('pointermove', (event) => {
+control?.addEventListener('pointermove', (event) => {
   if (!dragging) return;
-  const maxLeft = Math.max(0, window.innerWidth - control.offsetWidth);
-  const maxTop = Math.max(0, window.innerHeight - control.offsetHeight);
-  control.style.left = `${Math.min(maxLeft, Math.max(0, event.clientX - offsetX))}px`;
-  control.style.top = `${Math.min(maxTop, Math.max(0, event.clientY - offsetY))}px`;
-  control.style.right = 'auto';
+  if (!dragMoved && Math.hypot(event.clientX - dragStartX, event.clientY - dragStartY) < 3) return; // a click, not a drag
+  dragMoved = true;
+  placePanel(PanelPosition.clampPosition({ x: event.clientX - offsetX, y: event.clientY - offsetY }, panelSize(), viewportSize()));
 });
 
 function endDrag(event) {
   if (!dragging) return;
   dragging = false;
-  panelHeader.classList.remove('is-dragging');
+  control.classList.remove('is-dragging');
+  panelHeader?.classList.remove('is-dragging');
+  if (dragMoved) {
+    placePanel(PanelPosition.snapToEdges(panelPos, panelSize(), viewportSize()));
+    savePanelPosition();
+  }
   endPointerGesture(event);
 }
 
-panelHeader?.addEventListener('pointerup', endDrag);
-panelHeader?.addEventListener('pointercancel', endDrag);
+control?.addEventListener('pointerup', endDrag);
+control?.addEventListener('pointercancel', endDrag);
+
+// Keep the panel on screen when the display or the panel's own height changes.
+function keepPanelOnScreen() {
+  if (!control || !panelPos) return;
+  placePanel(PanelPosition.clampPosition(panelPos, panelSize(), viewportSize()));
+}
+window.addEventListener('resize', keepPanelOnScreen);
+if (control && typeof ResizeObserver === 'function') new ResizeObserver(keepPanelOnScreen).observe(control);
+restorePanelPosition();
 
 let collapsed = false;
 mini?.addEventListener('click', (event) => {

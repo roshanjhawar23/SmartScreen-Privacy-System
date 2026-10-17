@@ -52,6 +52,11 @@ html,body{
   overscroll-behavior:contain;
 }
 
+/* Children never shrink inside the height-limited panel (shrinking made sections overlap). */
+#control > *{flex-shrink:0}
+/* Header, status and Enable/Disable Protection stay pinned while the panel body scrolls. */
+#panelTop{position:sticky;top:-10px;margin:-10px -10px 0;padding:10px 10px 6px;display:flex;flex-direction:column;gap:8px;background:rgba(20,22,25,.98);border-radius:12px 12px 0 0;z-index:2}
+#control.is-dragging{cursor:grabbing;user-select:none}
 #panelHeader{display:flex;align-items:center;gap:8px;cursor:grab;user-select:none;touch-action:none}
 #panelHeader.is-dragging{cursor:grabbing}
 body.secondary-overlay #control,body.secondary-overlay #aiWarning{display:none!important}
@@ -80,7 +85,8 @@ body.secondary-overlay #control,body.secondary-overlay #aiWarning{display:none!i
 .event-row-head{display:flex;justify-content:space-between;align-items:center}
 #control .link-action{height:auto;padding:0;background:none;color:var(--label);font-size:8px;letter-spacing:.06em}
 #control .link-action:hover{background:none;color:#e2e6eb}
-.diag-panel{border:1px solid var(--line);border-radius:8px;padding:7px 8px;display:flex;flex-direction:column;gap:6px}
+.diag-panel{border:1px solid var(--line);border-radius:8px;padding:7px 8px;display:flex;flex-direction:column;gap:6px;max-height:min(340px,45vh);overflow-y:auto;overscroll-behavior:contain}
+.diag-panel > *{flex-shrink:0}
 .diag-panel[hidden]{display:none}
 .diag-grid{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:9px;color:#bcc3cb}
 .diag-grid span:nth-child(even){color:#e2e6eb;text-align:right;font-variant-numeric:tabular-nums}
@@ -91,7 +97,8 @@ body.secondary-overlay #control,body.secondary-overlay #aiWarning{display:none!i
 .evidence-actions{display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
 #control .evidence-actions button{height:24px;padding:0 4px;font-size:9px}
 .diag-actions{display:grid;grid-template-columns:1fr 1fr;gap:4px}
-.manage-panel{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px}
+.manage-panel{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px;max-height:min(340px,45vh);overflow-y:auto;overscroll-behavior:contain}
+.manage-panel > *{flex-shrink:0}
 .manage-panel[hidden]{display:none}
 .manage-section{display:flex;flex-direction:column;gap:5px;padding-bottom:7px;border-bottom:1px solid var(--line)}
 .manage-section:last-of-type{border-bottom:0;padding-bottom:0}

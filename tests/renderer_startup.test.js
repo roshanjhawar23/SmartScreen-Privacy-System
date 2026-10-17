@@ -6,7 +6,7 @@ const path = require('path');
 const vm = require('vm');
 
 const FRONTEND = path.join(__dirname, '..', 'frontend');
-const SCRIPTS = ['privacy_state.js', 'intensity.js', 'overlay_effects.js', 'renderer.js'];
+const SCRIPTS = ['privacy_state.js', 'intensity.js', 'panel_position.js', 'overlay_effects.js', 'renderer.js'];
 
 function stubElement(id) {
   const listeners = {};
@@ -137,14 +137,22 @@ test('slider gesture keeps mouse capture after the pointer leaves the panel', ()
   assert.equal(ignore(), true, 'click-through restored after release outside the panel');
 });
 
-test('dragging the slider does not move the panel', () => {
+test('dragging the slider does not move the panel; an empty area does', () => {
   const o = loadOverlay('primary');
-  const header = o.elements.get('panelHeader');
   const control = o.elements.get('control');
-  // Panel dragging is bound to the header only; the slider has no drag handler.
-  assert.ok(header.listeners.pointerdown?.length);
-  assert.equal(control.listeners.mousedown, undefined);
-  assert.equal(control.listeners.pointerdown, undefined);
+  const slider = o.elements.get('intensitySlider');
+  slider.closest = () => slider; // matches the no-drag selector (input)
+  const down = (target, x, y) => control.listeners.pointerdown.forEach((fn) => fn({ button: 0, target, clientX: x, clientY: y, pointerId: 1 }));
+  const move = (x, y) => control.listeners.pointermove.forEach((fn) => fn({ clientX: x, clientY: y }));
+  const up = (x, y) => control.listeners.pointerup.forEach((fn) => fn({ clientX: x, clientY: y, pointerId: 1 }));
+
+  down(slider, 100, 100); move(40, 160); up(40, 160);
+  assert.equal(control.style.left, undefined);
+
+  const empty = { closest: () => null };
+  down(empty, 100, 100); move(140, 150); up(140, 150);
+  assert.equal(control.style.left, '40px');
+  assert.equal(control.style.top, '50px');
 });
 
 test('secondary overlay only mirrors render state', () => {
